@@ -62,7 +62,7 @@ class Solver(object):
 
         self.model = eval(self.args.model).to(self.device)
 
-        self.optimizer = optim.SGD(self.model.parameters(), lr=self.args.lr, momentum=self.args.momentum)
+        self.optimizer = optim.SGD(self.model.parameters(), lr=self.args.lr, momentum=self.args.momentum, weight_decay=self.args.wd)
         self.scheduler = optim.lr_scheduler.MultiStepLR(self.optimizer, milestones=[75, 150], gamma=0.5)
         self.criterion = nn.CrossEntropyLoss().to(self.device)
 
