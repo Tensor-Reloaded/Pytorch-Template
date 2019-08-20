@@ -1,3 +1,5 @@
+# python main.py --lr=0.05 --lr_milestones 30 60 90 120 150 180 210 240 270 300 --lr_gamma=0.5 --wd=0.0005 --nesterov --momentum=0.9 --model="VGG('VGG11')" --epoch=300 --train_batch_size=128 --save_path="results/CIFAR-10/VGG-11/runs/run_1/metrics"
+
 import torch.optim as optim
 import torch.utils.data
 import torch.backends.cudnn as cudnn
@@ -8,8 +10,8 @@ import numpy as np
 import argparse
 
 from models import *
-from misc import progress_bar
-from learn_utils import begin_chart, begin_per_epoch_chart, add_chart_point, reset_seed
+from misc import progress_bar, begin_chart, begin_per_epoch_chart, add_chart_point
+from learn_utils import reset_seed
 
 
 CLASSES = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
@@ -27,6 +29,11 @@ def main():
     parser.add_argument('--num_workers_train', default=4, type=int, help='number of workers for loading train data')
     parser.add_argument('--num_workers_test', default=2, type=int, help='number of workers for loading test data')
     parser.add_argument('--cuda', default=torch.cuda.is_available(), type=bool, help='whether cuda is in use')
+    parser.add_argument('--nesterov', action='store_true', help='Use nesterov momentum')
+    parser.add_argument('--save_path', default="results", type=str, help='path to folder where results should be saved')
+    parser.add_argument('--seed', default=0, type=int, help='Seed to be used by randomizer')
+    parser.add_argument('--lr_milestones', nargs='+', type=int,default=[30, 60, 90, 120, 150], help='Lr Milestones')
+    parser.add_argument('--lr_gamma', default=0.5, type=float, help='Lr gamma')
     args = parser.parse_args()
 
     solver = Solver(args)
@@ -62,8 +69,8 @@ class Solver(object):
 
         self.model = eval(self.args.model).to(self.device)
 
-        self.optimizer = optim.SGD(self.model.parameters(), lr=self.args.lr, momentum=self.args.momentum, weight_decay=self.args.wd)
-        self.scheduler = optim.lr_scheduler.MultiStepLR(self.optimizer, milestones=[75, 150], gamma=0.5)
+        self.optimizer = optim.SGD(self.model.parameters(), lr=self.args.lr, momentum=self.args.momentum,weight_decay=self.args.wd, nesterov=self.args.nesterov)
+        self.scheduler = optim.lr_scheduler.MultiStepLR(self.optimizer, milestones=self.args.lr_milestones, gamma=self.args.lr_gamma)
         self.criterion = nn.CrossEntropyLoss().to(self.device)
 
     def train(self):
@@ -114,8 +121,8 @@ class Solver(object):
 
         return test_loss, test_correct / total
 
-    def save(self):
-        model_out_path = "model.pth"
+    def save(self,epoch,accuracy):
+        model_out_path = "checkpoints/model_%s_%.2f%%.pth" % (epoch,accuracy * 100)
         torch.save(self.model, model_out_path)
         print("Checkpoint saved to {}".format(model_out_path))
 
@@ -123,29 +130,28 @@ class Solver(object):
         self.load_data()
         self.load_model()
 
-        begin_per_epoch_chart("TrainAcc")
-        begin_per_epoch_chart("TestAcc")
-        begin_per_epoch_chart("TrainLoss")
-        begin_per_epoch_chart("TestLoss")
+        begin_per_epoch_chart("TrainAcc",self.args.save_path)
+        begin_per_epoch_chart("TestAcc",self.args.save_path)
+        begin_per_epoch_chart("TrainLoss",self.args.save_path)
+        begin_per_epoch_chart("TestLoss",self.args.save_path)
 
-        reset_seed(0)
+        reset_seed(self.args.seed)
         accuracy = 0
         for epoch in range(1, self.args.epoch + 1):
+            print("\n===> epoch: %d/%d" % (epoch,self.args.epoch))
             self.scheduler.step(epoch)
-            print("\n===> epoch: %d/200" % epoch)
+
             train_result = self.train()
-            add_chart_point("TrainAcc", epoch, train_result[1])
-            add_chart_point("TrainLoss", epoch, train_result[0])
-            print(train_result)
+            add_chart_point("TrainAcc", epoch, train_result[1],self.args.save_path)
+            add_chart_point("TrainLoss", epoch, train_result[0],self.args.save_path)
+
             test_result = self.test()
+            add_chart_point("TestAcc", epoch, test_result[1],self.args.save_path)
+            add_chart_point("TestLoss", epoch, test_result[0],self.args.save_path)
 
-            add_chart_point("TestAcc", epoch, test_result[1])
-            add_chart_point("TestLoss", epoch, test_result[0])
-
-            accuracy = max(accuracy, test_result[1])
-            if epoch == self.args.epoch:
-                print("===> BEST ACC. PERFORMANCE: %.3f%%" % (accuracy * 100))
-                self.save()
+            if accuracy < test_result[1]:
+                accuracy = test_result[1]
+                self.save(epoch,accuracy)
 
 
 if __name__ == '__main__':
