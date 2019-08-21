@@ -34,6 +34,7 @@ def main():
     parser.add_argument('--seed', default=0, type=int, help='Seed to be used by randomizer')
     parser.add_argument('--lr_milestones', nargs='+', type=int,default=[30, 60, 90, 120, 150], help='Lr Milestones')
     parser.add_argument('--lr_gamma', default=0.5, type=float, help='Lr gamma')
+    parser.add_argument('--progress_bar', '-pb', action='store_true', help='Show the progress bar')
     args = parser.parse_args()
 
     solver = Solver(args)
@@ -94,8 +95,9 @@ class Solver(object):
             # train_correct incremented by one if predicted right
             train_correct += np.sum(prediction[1].cpu().numpy() == target.cpu().numpy())
 
-            progress_bar(batch_num, len(self.train_loader), 'Loss: %.4f | Acc: %.3f%% (%d/%d)'
-                         % (train_loss / (batch_num + 1), 100. * train_correct / total, train_correct, total))
+            if self.args.progress_bar:
+                progress_bar(batch_num, len(self.train_loader), 'Loss: %.4f | Acc: %.3f%% (%d/%d)'
+                    % (train_loss / (batch_num + 1), 100. * train_correct / total, train_correct, total))
 
         return train_loss, train_correct / total
 
@@ -116,8 +118,9 @@ class Solver(object):
                 total += target.size(0)
                 test_correct += np.sum(prediction[1].cpu().numpy() == target.cpu().numpy())
 
-                progress_bar(batch_num, len(self.test_loader), 'Loss: %.4f | Acc: %.3f%% (%d/%d)'
-                             % (test_loss / (batch_num + 1), 100. * test_correct / total, test_correct, total))
+                if self.args.progress_bar:
+                    progress_bar(batch_num, len(self.test_loader), 'Loss: %.4f | Acc: %.3f%% (%d/%d)'
+                        % (test_loss / (batch_num + 1), 100. * test_correct / total, test_correct, total))
 
         return test_loss, test_correct / total
 
