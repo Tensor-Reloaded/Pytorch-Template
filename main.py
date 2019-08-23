@@ -73,7 +73,8 @@ class Solver(object):
             self.device = torch.device('cpu')
 
         self.model = eval(self.args.model).to(self.device)
-
+        
+        #TODO Fix error for: python main.py --lr=0.05 --lr_milestones 30 60 90 120 150 180 210 240 270 300 --lr_gamma=0.5 --wd=0.0005 --nesterov --momentum=0.9 --model="VGG('VGG11')" --epoch=300 --train_batch_size=128 --half
         if self.cuda:
             if self.args.half:
                 self.model.half()
