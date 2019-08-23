@@ -1,17 +1,18 @@
 # python main.py --lr=0.05 --lr_milestones 30 60 90 120 150 180 210 240 270 300 --lr_gamma=0.5 --wd=0.0005 --nesterov --momentum=0.9 --model="VGG('VGG11')" --epoch=300 --train_batch_size=128 --save_path="results/CIFAR-10/VGG-11/runs/run_1/metrics"
-
+import os
 import torch.optim as optim
 import torch.utils.data
 import torch.backends.cudnn as cudnn
 import torch.nn as nn
 import torchvision
 from torchvision import transforms as transforms
+from torch.utils.tensorboard import SummaryWriter
 import numpy as np
 
 import argparse
 
 from models import *
-from misc import progress_bar, begin_chart, begin_per_epoch_chart, add_chart_point
+from misc import progress_bar
 from learn_utils import reset_seed
 
 
@@ -56,6 +57,9 @@ class Solver(object):
         self.cuda = config.cuda
         self.train_loader = None
         self.test_loader = None
+        self.writer = SummaryWriter()
+        self.batch_plot_idx = 0
+
 
     def load_data(self):
         train_transform = transforms.Compose([transforms.RandomHorizontalFlip(), transforms.ToTensor()])
@@ -119,6 +123,10 @@ class Solver(object):
         self.scheduler = optim.lr_scheduler.MultiStepLR(self.optimizer, milestones=self.args.lr_milestones, gamma=self.args.lr_gamma)
         self.criterion = nn.CrossEntropyLoss().to(self.device)
 
+    def get_batch_plot_idx(self):
+        self.batch_plot_idx += 1
+        return self.batch_plot_idx - 1
+
     def train(self):
         print("train:")
         self.model.train()
@@ -138,6 +146,7 @@ class Solver(object):
             loss.backward()
             self.optimizer.step()
             train_loss += loss.item()
+            self.writer.add_scalar("Loss/train batch", loss.item(), self.get_batch_plot_idx())
             prediction = torch.max(output, 1)  # second param "1" represents the dimension to be reduced
             total += target.size(0)
 
@@ -164,6 +173,7 @@ class Solver(object):
                     data = data.half()
                 output = self.model(data)
                 loss = self.criterion(output, target)
+                self.writer.add_scalar("Loss/test batch", loss.item(), self.get_batch_plot_idx())
                 test_loss += loss.item()
                 prediction = torch.max(output, 1)
                 total += target.size(0)
@@ -176,6 +186,7 @@ class Solver(object):
         return test_loss, test_correct / total
 
     def save(self,epoch,accuracy):
+        os.makedirs('checkpoints', exist_ok=True)
         model_out_path = "checkpoints/model_%s_%.2f%%.pth" % (epoch,accuracy * 100)
         torch.save(self.model, model_out_path)
         print("Checkpoint saved to {}".format(model_out_path))
@@ -184,11 +195,6 @@ class Solver(object):
         self.load_data()
         self.load_model()
 
-        begin_per_epoch_chart("TrainAcc",self.args.save_path)
-        begin_per_epoch_chart("TestAcc",self.args.save_path)
-        begin_per_epoch_chart("TrainLoss",self.args.save_path)
-        begin_per_epoch_chart("TestLoss",self.args.save_path)
-
         reset_seed(self.args.seed)
         accuracy = 0
         for epoch in range(1, self.args.epoch + 1):
@@ -196,17 +202,27 @@ class Solver(object):
             self.scheduler.step(epoch)
 
             train_result = self.train()
-            add_chart_point("TrainAcc", epoch, train_result[1],self.args.save_path)
-            add_chart_point("TrainLoss", epoch, train_result[0],self.args.save_path)
+
+            self.writer.add_scalar("Loss/train", train_result[0], epoch)
+            self.writer.add_scalar("Acc/train", train_result[1], epoch)
 
             test_result = self.test()
-            add_chart_point("TestAcc", epoch, test_result[1],self.args.save_path)
-            add_chart_point("TestLoss", epoch, test_result[0],self.args.save_path)
+
+            self.writer.add_scalar("Loss/test", test_result[0], epoch)
+            self.writer.add_scalar("Acc/test", test_result[1], epoch)
+
+            self.writer.add_scalar("Model/norm", self.get_model_norm(), epoch)
+            self.writer.add_scalar("Train Params/lr", self.scheduler.get_lr()[0], epoch)
 
             if accuracy < test_result[1]:
                 accuracy = test_result[1]
                 self.save(epoch,accuracy)
 
+    def get_model_norm(self, norm_type = 2):
+        norm = 0
+        for param in self.model.parameters():
+            norm += torch.norm(param, p=norm_type)
+        return norm
 
 if __name__ == '__main__':
     main()
