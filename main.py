@@ -3,6 +3,7 @@
 import torch.optim as optim
 import torch.utils.data
 import torch.backends.cudnn as cudnn
+import torch.nn as nn
 import torchvision
 from torchvision import transforms as transforms
 import numpy as np
@@ -23,6 +24,9 @@ def main():
     parser.add_argument('--momentum', default=0.0, type=float, help='sgd momentum')
     parser.add_argument('--wd', default=0.0, type=float, help='weight decay')
     parser.add_argument('--model', default="VGG('VGG19')", type=str, help='what model to use')
+    parser.add_argument('--half', '-hf', action='store_true', help='use half precision')
+    parser.add_argument('--initialization', '-init', default=0, type=int, help='The type of initialization to be used \n 0 - Default pytorch initialization \n 1 - Xavier Initialization\n 2 - He et. al Initialization\n 3 - SELU Initialization\n 4 - Orthogonal Initialization')
+    parser.add_argument('--initialization_batch_norm', '-init_batch', action='store_true', help='use batch norm initialization')
     parser.add_argument('--epoch', default=200, type=int, help='number of epochs tp train for')
     parser.add_argument('--train_batch_size', default=128, type=int, help='training batch size')
     parser.add_argument('--test_batch_size', default=512, type=int, help='testing batch size')
@@ -70,6 +74,46 @@ class Solver(object):
 
         self.model = eval(self.args.model).to(self.device)
 
+        if self.cuda:
+            if self.args.half:
+                self.model.half()
+                for layer in self.model.modules():
+                    if isinstance(layer, nn.BatchNorm2d):
+                        layer.float()
+                print("Using half precision")
+
+        if self.args.initialization == 1:
+            #xavier init
+            for m in self.model.modules():
+                if isinstance(m, (nn.Conv2d, nn.Linear)):
+                    nn.init.xavier_uniform(m.weight, gain=nn.init.calculate_gain('relu'))
+        elif self.args.initialization == 2:
+            # he initialization
+            for m in self.model.modules():
+                if isinstance(m, (nn.Conv2d, nn.Linear)):
+                    nn.init.kaiming_normal(m.weight, mode='fan_in')
+        elif self.args.initialization == 3:
+            # selu init
+            for m in self.model.modules():
+                if isinstance(m, nn.Conv2d):
+                    fan_in = m.kernel_size[0] * m.kernel_size[1] * m.in_channels
+                    nn.init.normal(m.weight, 0, sqrt(1. / fan_in))
+                elif isinstance(m, nn.Linear):
+                    fan_in = m.in_features
+                    nn.init.normal(m.weight, 0, sqrt(1. / fan_in))
+        elif self.args.initialization == 4:
+            # orthogonal initialization
+            for m in self.model.modules():
+                if isinstance(m, (nn.Conv2d, nn.Linear)):
+                    nn.init.orthogonal(m.weight)
+                    
+        if self.args.initialization_batch_norm:
+            # batch norm initialization
+            for m in self.model.modules():
+                if isinstance(m, nn.BatchNorm2d):
+                    nn.init.constant(m.weight, 1)
+                    nn.init.constant(m.bias, 0)
+
         self.optimizer = optim.SGD(self.model.parameters(), lr=self.args.lr, momentum=self.args.momentum,weight_decay=self.args.wd, nesterov=self.args.nesterov)
         self.scheduler = optim.lr_scheduler.MultiStepLR(self.optimizer, milestones=self.args.lr_milestones, gamma=self.args.lr_gamma)
         self.criterion = nn.CrossEntropyLoss().to(self.device)
@@ -84,6 +128,8 @@ class Solver(object):
         for batch_num, (data, target) in enumerate(self.train_loader):
             data, target = data.to(self.device), target.to(self.device)
             self.optimizer.zero_grad()
+            if self.device == 'cuda' and self.args.half:
+                data = data.half()
             output = self.model(data)
             loss = self.criterion(output, target)
             loss.backward()
@@ -111,6 +157,8 @@ class Solver(object):
         with torch.no_grad():
             for batch_num, (data, target) in enumerate(self.test_loader):
                 data, target = data.to(self.device), target.to(self.device)
+                if self.device == 'cuda' and self.args.half:
+                    data = data.half()
                 output = self.model(data)
                 loss = self.criterion(output, target)
                 test_loss += loss.item()
