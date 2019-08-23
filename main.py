@@ -128,9 +128,11 @@ class Solver(object):
 
         for batch_num, (data, target) in enumerate(self.train_loader):
             data, target = data.to(self.device), target.to(self.device)
-            self.optimizer.zero_grad()
-            if self.device == 'cuda' and self.args.half:
+            if self.device == torch.device('cuda') and self.args.half:
+                # data, target = data.half(), target.half()
                 data = data.half()
+            self.optimizer.zero_grad()
+
             output = self.model(data)
             loss = self.criterion(output, target)
             loss.backward()
