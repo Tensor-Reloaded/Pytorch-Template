@@ -199,7 +199,6 @@ class Solver(object):
         accuracy = 0
         for epoch in range(1, self.args.epoch + 1):
             print("\n===> epoch: %d/%d" % (epoch,self.args.epoch))
-            self.scheduler.step(epoch)
 
             train_result = self.train()
 
@@ -217,6 +216,7 @@ class Solver(object):
             if accuracy < test_result[1]:
                 accuracy = test_result[1]
                 self.save(epoch,accuracy)
+            self.scheduler.step(epoch)
 
     def get_model_norm(self, norm_type = 2):
         norm = 0
