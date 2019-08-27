@@ -140,7 +140,6 @@ class Solver(object):
         for batch_num, (data, target) in enumerate(self.train_loader):
             data, target = data.to(self.device), target.to(self.device)
             if self.device == torch.device('cuda') and self.args.half:
-                # data, target = data.half(), target.half()
                 data = data.half()
             self.optimizer.zero_grad()
 
@@ -174,7 +173,7 @@ class Solver(object):
                 progress_bar(batch_num, len(self.train_loader), 'Loss: %.4f | Acc: %.3f%% (%d/%d)'
                     % (total_loss / (batch_num + 1), 100.0 * correct/total, correct, total))
 
-        return total_loss, correct/total, TP, TN, FP, FN
+        return total_loss, correct / total, TP, TN, FP, FN
 
     def test(self):
         print("test:")
@@ -229,10 +228,10 @@ class Solver(object):
         print("Checkpoint saved to {}".format(model_out_path))
 
     def run(self):
+        reset_seed(self.args.seed)
         self.load_data()
         self.load_model()
 
-        reset_seed(self.args.seed)
         accuracy = 0
         for epoch in range(1, self.args.epoch + 1):
             print("\n===> epoch: %d/%d" % (epoch,self.args.epoch))
