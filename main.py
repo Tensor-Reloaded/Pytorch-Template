@@ -21,27 +21,36 @@ CLASSES = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship'
 
 def main():
     parser = argparse.ArgumentParser(description="cifar-10 with PyTorch")
-    parser.add_argument('--lr', default=0.01, type=float, help='learning rate')
-    parser.add_argument('--momentum', default=0.0, type=float, help='sgd momentum')
-    parser.add_argument('--wd', default=0.0, type=float, help='weight decay')
     parser.add_argument('--model', default="VGG('VGG19')", type=str, help='what model to use')
     parser.add_argument('--half', '-hf', action='store_true', help='use half precision')
     parser.add_argument('--load_model', default="", type=str, help='what model to load')
-    parser.add_argument('--initialization', '-init', default=0, type=int, help='The type of initialization to be used \n 0 - Default pytorch initialization \n 1 - Xavier Initialization\n 2 - He et. al Initialization\n 3 - SELU Initialization\n 4 - Orthogonal Initialization')
-    parser.add_argument('--initialization_batch_norm', '-init_batch', action='store_true', help='use batch norm initialization')
+    
+    parser.add_argument('--lr', default=0.01, type=float, help='learning rate')
+    parser.add_argument('--wd', default=0.0, type=float, help='weight decay')
+    parser.add_argument('--momentum', default=0.0, type=float, help='sgd momentum')
+    parser.add_argument('--nesterov', action='store_true', help='Use nesterov momentum')
     parser.add_argument('--epoch', default=200, type=int, help='number of epochs tp train for')
     parser.add_argument('--train_batch_size', default=128, type=int, help='training batch size')
     parser.add_argument('--test_batch_size', default=512, type=int, help='testing batch size')
-    parser.add_argument('--num_workers_train', default=4, type=int, help='number of workers for loading train data')
-    parser.add_argument('--num_workers_test', default=2, type=int, help='number of workers for loading test data')
-    parser.add_argument('--cuda', default=torch.cuda.is_available(), type=bool, help='whether cuda is in use')
-    parser.add_argument('--nesterov', action='store_true', help='Use nesterov momentum')
+    parser.add_argument('--initialization', '-init', default=0, type=int, help='The type of initialization to be used \n 0 - Default pytorch initialization \n 1 - Xavier Initialization\n 2 - He et. al Initialization\n 3 - SELU Initialization\n 4 - Orthogonal Initialization')
+    parser.add_argument('--initialization_batch_norm', '-init_batch', action='store_true', help='use batch norm initialization')
+    
     parser.add_argument('--save_model', '-save', action='store_true', help='perform_top_down_sum')
     parser.add_argument('--save_interval', default=5, type=int, help='perform_top_down_sum')
     parser.add_argument('--save_dir', default="checkpoints", type=str, help='save dir name')
-    parser.add_argument('--seed', default=0, type=int, help='Seed to be used by randomizer')
+
     parser.add_argument('--lr_milestones', nargs='+', type=int,default=[30, 60, 90, 120, 150], help='Lr Milestones')
+    parser.add_argument('--use_reduce_lr', action='store_true', help='Use reduce lr on plateou')
+    parser.add_argument('--reduce_lr_patience', type=int, default=20, help='reduce lr patience')
+    parser.add_argument('--reduce_lr_delta', type=float, default=0.02, help='minimal difference to improve losss')
+    parser.add_argument('--reduce_lr_min_lr', type=float, default=0.0005, help='minimal lr')
     parser.add_argument('--lr_gamma', default=0.5, type=float, help='Lr gamma')
+
+    parser.add_argument('--num_workers_train', default=4, type=int, help='number of workers for loading train data')
+    parser.add_argument('--num_workers_test', default=2, type=int, help='number of workers for loading test data')
+
+    parser.add_argument('--cuda', default=torch.cuda.is_available(), type=bool, help='whether cuda is in use')
+    parser.add_argument('--seed', default=0, type=int, help='Seed to be used by randomizer')
     parser.add_argument('--progress_bar', '-pb', action='store_true', help='Show the progress bar')
     args = parser.parse_args()
 
@@ -133,7 +142,10 @@ class Solver(object):
         self.model = self.model.to(self.device)
 
         self.optimizer = optim.SGD(self.model.parameters(), lr=self.args.lr, momentum=self.args.momentum,weight_decay=self.args.wd, nesterov=self.args.nesterov)
-        self.scheduler = optim.lr_scheduler.MultiStepLR(self.optimizer, milestones=self.args.lr_milestones, gamma=self.args.lr_gamma)
+        if self.args.use_reduce_lr:
+            self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='min', factor=self.args.lr_gamma, patience=self.args.reduce_lr_patience,min_lr=self.args.reduce_lr_min_lr, verbose=True, threshold=self.args.reduce_lr_delta)
+        else:
+            self.scheduler = optim.lr_scheduler.MultiStepLR(self.optimizer, milestones=self.args.lr_milestones, gamma=self.args.lr_gamma)
         self.criterion = nn.CrossEntropyLoss().to(self.device)
 
     def get_batch_plot_idx(self):
@@ -351,7 +363,10 @@ class Solver(object):
             if self.args.save_model and epoch % self.args.save_interval == 0:
                 self.save(0, epoch)
                 
-            self.scheduler.step(epoch)
+            if self.args.use_reduce_lr:
+                self.scheduler.step(train_result[0])
+            else:
+                self.scheduler.step(epoch)
 
     def get_model_norm(self, norm_type = 2):
         norm = 0.0
