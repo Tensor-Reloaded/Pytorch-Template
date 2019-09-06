@@ -1,4 +1,4 @@
-# python main.py --lr=0.05 --lr_milestones 30 60 90 120 150 180 210 240 270 300 --lr_gamma=0.5 --wd=0.0005 --nesterov --momentum=0.9 --model="VGG('VGG11')" --epoch=300 --train_batch_size=128 --save_path="results/CIFAR-10/VGG-11/runs/run_1/metrics"
+# python main.py --lr=0.05 --lr_milestones 30 60 90 120 150 180 210 240 270 300 --lr_gamma=0.5 --wd=0.0005 --nesterov --momentum=0.9 --model="VGG('VGG11')" --epoch=300 --train_batch_size=128
 import os
 import torch.optim as optim
 import torch.utils.data
@@ -35,7 +35,7 @@ def main():
     parser.add_argument('--num_workers_test', default=2, type=int, help='number of workers for loading test data')
     parser.add_argument('--cuda', default=torch.cuda.is_available(), type=bool, help='whether cuda is in use')
     parser.add_argument('--nesterov', action='store_true', help='Use nesterov momentum')
-    parser.add_argument('--save_path', default="results", type=str, help='path to folder where results should be saved')
+    parser.add_argument('--save_dir', default="checkpoints", type=str, help='save dir name')
     parser.add_argument('--seed', default=0, type=int, help='Seed to be used by randomizer')
     parser.add_argument('--lr_milestones', nargs='+', type=int,default=[30, 60, 90, 120, 150], help='Lr Milestones')
     parser.add_argument('--lr_gamma', default=0.5, type=float, help='Lr gamma')
@@ -57,7 +57,10 @@ class Solver(object):
         self.cuda = config.cuda
         self.train_loader = None
         self.test_loader = None
-        self.writer = SummaryWriter()
+        if self.args.save_dir == "" or self.args.save_dir == None:
+            self.writer = SummaryWriter()
+        else:
+            self.writer = SummaryWriter(log_dir="runs/"+self.args.save_dir)
         self.batch_plot_idx = 0
 
 
@@ -77,6 +80,9 @@ class Solver(object):
             self.device = torch.device('cpu')
 
         self.model = eval(self.args.model).to(self.device)
+        self.save_dir = "../storage/" + self.args.save_dir
+        if not os.path.isdir(self.save_dir):
+            os.mkdir(self.save_dir)
         
         if self.cuda:
             if self.args.half:
@@ -222,9 +228,15 @@ class Solver(object):
         return total_loss, correct/total, TP, TN, FP, FN
 
     def save(self,epoch,accuracy):
-        os.makedirs('checkpoints', exist_ok=True)
-        model_out_path = "checkpoints/model_%s_%.2f%%.pth" % (epoch,accuracy * 100)
-        torch.save(self.model, model_out_path)
+        if tag != None:
+            tag = "_"+tag
+        else:
+            tag=""
+        if self.args.top_down_sum:
+            model_out_path = self.save_dir + "/sum_augm_model_{}_{}{}.pth".format(epoch, accuracy * 100, tag)
+        else:
+            model_out_path = self.save_dir + "/baseline_sum_augm_model_{}_{}{}.pth".format(epoch, accuracy * 100, tag)
+        torch.save(self.model.state_dict(), model_out_path)
         print("Checkpoint saved to {}".format(model_out_path))
 
     def run(self):
