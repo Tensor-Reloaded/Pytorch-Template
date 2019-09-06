@@ -26,6 +26,7 @@ def main():
     parser.add_argument('--wd', default=0.0, type=float, help='weight decay')
     parser.add_argument('--model', default="VGG('VGG19')", type=str, help='what model to use')
     parser.add_argument('--half', '-hf', action='store_true', help='use half precision')
+    parser.add_argument('--load_model', default="", type=str, help='what model to load')
     parser.add_argument('--initialization', '-init', default=0, type=int, help='The type of initialization to be used \n 0 - Default pytorch initialization \n 1 - Xavier Initialization\n 2 - He et. al Initialization\n 3 - SELU Initialization\n 4 - Orthogonal Initialization')
     parser.add_argument('--initialization_batch_norm', '-init_batch', action='store_true', help='use batch norm initialization')
     parser.add_argument('--epoch', default=200, type=int, help='number of epochs tp train for')
@@ -79,7 +80,7 @@ class Solver(object):
         else:
             self.device = torch.device('cpu')
 
-        self.model = eval(self.args.model).to(self.device)
+        self.model = eval(self.args.model)
         self.save_dir = "../storage/" + self.args.save_dir
         if not os.path.isdir(self.save_dir):
             os.mkdir(self.save_dir)
@@ -123,6 +124,11 @@ class Solver(object):
                 if isinstance(m, nn.BatchNorm2d):
                     nn.init.constant(m.weight, 1)
                     nn.init.constant(m.bias, 0)
+
+        if len(self.args.load_model) > 0:
+            print("Loading model from " + self.args.load_model)
+            self.model.load_state_dict(torch.load(self.args.load_model))
+        self.model = self.model.to(self.device)
 
         self.optimizer = optim.SGD(self.model.parameters(), lr=self.args.lr, momentum=self.args.momentum,weight_decay=self.args.wd, nesterov=self.args.nesterov)
         self.scheduler = optim.lr_scheduler.MultiStepLR(self.optimizer, milestones=self.args.lr_milestones, gamma=self.args.lr_gamma)
