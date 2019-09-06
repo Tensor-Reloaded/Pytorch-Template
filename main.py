@@ -36,6 +36,8 @@ def main():
     parser.add_argument('--num_workers_test', default=2, type=int, help='number of workers for loading test data')
     parser.add_argument('--cuda', default=torch.cuda.is_available(), type=bool, help='whether cuda is in use')
     parser.add_argument('--nesterov', action='store_true', help='Use nesterov momentum')
+    parser.add_argument('--save_model', '-save', action='store_true', help='perform_top_down_sum')
+    parser.add_argument('--save_interval', default=5, type=int, help='perform_top_down_sum')
     parser.add_argument('--save_dir', default="checkpoints", type=str, help='save dir name')
     parser.add_argument('--seed', default=0, type=int, help='Seed to be used by randomizer')
     parser.add_argument('--lr_milestones', nargs='+', type=int,default=[30, 60, 90, 120, 150], help='Lr Milestones')
@@ -345,6 +347,10 @@ class Solver(object):
             if accuracy < test_result[1]:
                 accuracy = test_result[1]
                 self.save(epoch,accuracy)
+
+            if self.args.save_model and epoch % self.args.save_interval == 0:
+                self.save(0, epoch)
+                
             self.scheduler.step(epoch)
 
     def get_model_norm(self, norm_type = 2):
