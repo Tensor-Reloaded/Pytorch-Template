@@ -298,14 +298,9 @@ class Solver(object):
             tag = "_"+tag
         else:
             tag = ""
-        if self.args.top_down_sum:
-            model_out_path = self.save_dir + \
-                "/sum_augm_model_{}_{}{}.pth".format(epoch,
-                                                     accuracy * 100, tag)
-        else:
-            model_out_path = self.save_dir + \
-                "/baseline_sum_augm_model_{}_{}{}.pth".format(
-                    epoch, accuracy * 100, tag)
+        model_out_path = self.save_dir + \
+            "/model_{}_{}{}.pth".format(
+                epoch, accuracy * 100, tag)
         torch.save(self.model.state_dict(), model_out_path)
         print("Checkpoint saved to {}".format(model_out_path))
 
