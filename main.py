@@ -1,19 +1,18 @@
 # python main.py --lr=0.05 --lr_milestones 30 60 90 120 150 180 210 240 270 300 --lr_gamma=0.5 --wd=0.0005 --nesterov --momentum=0.9 --model="VGG('VGG11')" --epoch=300 --train_batch_size=128
+import argparse
 import os
+
+import numpy as np
+import torch.backends.cudnn as cudnn
 import torch.optim as optim
 import torch.utils.data
-import torch.backends.cudnn as cudnn
 import torchvision
-from torchvision import transforms as transforms
 from tensorboardX import SummaryWriter
-import numpy as np
+from torchvision import transforms as transforms
 
-import argparse
-
-from models import *
-from misc import progress_bar
 from learn_utils import reset_seed
-
+from misc import progress_bar
+from models import *
 
 CLASSES = ('plane', 'car', 'bird', 'cat', 'deer',
            'dog', 'frog', 'horse', 'ship', 'truck')
@@ -148,10 +147,10 @@ class Solver(object):
                 if isinstance(m, nn.Conv2d):
                     fan_in = m.kernel_size[0] * \
                         m.kernel_size[1] * m.in_channels
-                    nn.init.normal(m.weight, 0, sqrt(1. / fan_in))
+                    nn.init.normal(m.weight, 0, math.sqrt(1. / fan_in))
                 elif isinstance(m, nn.Linear):
                     fan_in = m.in_features
-                    nn.init.normal(m.weight, 0, sqrt(1. / fan_in))
+                    nn.init.normal(m.weight, 0, math.sqrt(1. / fan_in))
         elif self.args.initialization == 4:
             # orthogonal initialization
             for m in self.model.modules():
