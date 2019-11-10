@@ -3,10 +3,9 @@ import os
 import torch.optim as optim
 import torch.utils.data
 import torch.backends.cudnn as cudnn
-import torch.nn as nn
 import torchvision
 from torchvision import transforms as transforms
-from torch.utils.tensorboard import SummaryWriter
+from tensorboardX import SummaryWriter
 import numpy as np
 
 import argparse
