@@ -1,1 +1,0 @@
-# Results for CIFAR-10 using VGG-11
