@@ -6,7 +6,6 @@
 import random
 
 import numpy as np
-import progressbar
 import torch
 import torch.nn as nn
 import torch.nn.init as init
@@ -14,17 +13,19 @@ import torch.nn.init as init
 
 def get_mean_and_std(dataset):
     '''Compute the mean and std value of dataset.'''
-    dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=True, num_workers=2)
+    dataloader = torch.utils.data.DataLoader(
+        dataset, batch_size=1, shuffle=True, num_workers=2)
     mean = torch.zeros(3)
     std = torch.zeros(3)
     print('==> Computing mean and std..')
     for inputs, targets in dataloader:
         for i in range(3):
-            mean[i] += inputs[:,i,:,:].mean()
-            std[i] += inputs[:,i,:,:].std()
+            mean[i] += inputs[:, i, :, :].mean()
+            std[i] += inputs[:, i, :, :].std()
     mean.div_(len(dataset))
     std.div_(len(dataset))
     return mean, std
+
 
 def init_params(net):
     '''Init layer parameters.'''
@@ -41,6 +42,7 @@ def init_params(net):
             if m.bias:
                 init.constant(m.bias, 0)
 
+
 def reset_seed(seed):
     """
     Sets seed of all random number generators used to the same seed, given as argument
@@ -52,6 +54,7 @@ def reset_seed(seed):
     torch.cuda.manual_seed_all(seed)
     np.random.seed(seed)
     random.seed(seed)
+
 
 def compute_weights_l1_norm(model):
     norm_sum = 0

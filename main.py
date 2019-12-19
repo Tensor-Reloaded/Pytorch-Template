@@ -1,10 +1,12 @@
 # python main.py --lr=0.05 --lr_milestones 30 60 90 120 150 180 210 240 270 300 --lr_gamma=0.5 --wd=0.0005 --nesterov --momentum=0.9 --model="VGG('VGG11')" --epoch=300 --train_batch_size=128
 import argparse
+import pickle
 import os
 
 import numpy as np
 import torch.backends.cudnn as cudnn
 import torch.optim as optim
+import torch.nn as nn
 import torch.utils.data
 import torchvision
 from tensorboardX import SummaryWriter
@@ -22,6 +24,8 @@ def main():
     parser = argparse.ArgumentParser(description="cifar-10 with PyTorch")
     parser.add_argument('--model', default="VGG('VGG19')",
                         type=str, help='what model to use')
+    parser.add_argument('--dataset', default="CIFAR-10", type=str, choices=[
+                        "CIFAR-10", "CIFAR-100"], help='What dataset to use. Options: CIFAR-10, CIFAR-100')
     parser.add_argument('--half', '-hf', action='store_true',
                         help='use half precision')
     parser.add_argument('--load_model', default="",
@@ -39,6 +43,8 @@ def main():
                         type=int, help='training batch size')
     parser.add_argument('--test_batch_size', default=512,
                         type=int, help='testing batch size')
+    parser.add_argument('--train_subset', default=None,
+                        type=int, help='Number of samples to train on')
     parser.add_argument('--initialization', '-init', default=0, type=int,
                         help='The type of initialization to be used \n 0 - Default pytorch initialization \n 1 - Xavier Initialization\n 2 - He et. al Initialization\n 3 - SELU Initialization\n 4 - Orthogonal Initialization')
     parser.add_argument('--initialization_batch_norm', '-init_batch',
@@ -68,6 +74,8 @@ def main():
     parser.add_argument('--num_workers_test', default=2,
                         type=int, help='number of workers for loading test data')
 
+    parser.add_argument('--all_metrics', action='store_true',
+                        help="In addition to accuracy and loss calculate all metrics available")
     parser.add_argument('--cuda', default=torch.cuda.is_available(),
                         type=bool, help='whether cuda is in use')
     parser.add_argument('--seed', default=0, type=int,
@@ -98,15 +106,61 @@ class Solver(object):
         self.batch_plot_idx = 0
 
     def load_data(self):
-        train_transform = transforms.Compose(
-            [transforms.RandomHorizontalFlip(), transforms.ToTensor()])
-        test_transform = transforms.Compose([transforms.ToTensor()])
-        train_set = torchvision.datasets.CIFAR10(
-            root='../storage', train=True, download=True, transform=train_transform)
-        self.train_loader = torch.utils.data.DataLoader(
-            dataset=train_set, batch_size=self.args.train_batch_size, shuffle=True)
-        test_set = torchvision.datasets.CIFAR10(
-            root='../storage', train=False, download=True, transform=test_transform)
+        if "CIFAR" in self.args.dataset:
+            normalize = transforms.Normalize(
+                mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+
+            train_transform = transforms.Compose([transforms.RandomHorizontalFlip(
+            ), transforms.RandomCrop(32, 4), transforms.ToTensor(), normalize])
+            test_transform = transforms.Compose(
+                [transforms.ToTensor(), normalize])
+        else:
+            train_transform = transforms.Compose([transforms.ToTensor()])
+            test_transform = transforms.Compose([transforms.ToTensor()])
+
+        if self.args.dataset == "CIFAR-10":
+            self.train_set = torchvision.datasets.CIFAR10(
+                root='../storage', train=True, download=True, transform=train_transform)
+        elif self.args.dataset == "CIFAR-100":
+            self.train_set = torchvision.datasets.CIFAR100(
+                root='../storage', train=True, download=True, transform=train_transform)
+
+        if self.args.train_subset == None:
+            self.train_loader = torch.utils.data.DataLoader(
+                dataset=self.train_set, batch_size=self.args.train_batch_size, shuffle=True)
+        else:
+            filename = "subset_indices/subset_balanced_{}_{}.data".format(
+                self.dataset, self.args.train_subset)
+            if os.path.isfile(filename):
+                with open(filename, 'rb') as f:
+                    subset_indices = pickle.load(f)
+            else:
+                subset_indices = []
+                per_class = self.args.train_subset//self.nr_classes
+                targets = torch.tensor(self.train_set.targets)
+                for i in range(self.nr_classes):
+                    idx = (targets == i).nonzero().view(-1)
+                    perm = torch.randperm(idx.size(0))[:per_class]
+                    subset_indices += idx[perm].tolist()
+                if not os.path.isdir("subset_indices"):
+                    os.makedirs("subset_indices")
+                with open(filename, 'wb') as f:
+                    pickle.dump(subset_indices, f)
+            subset_indices = torch.LongTensor(subset_indices)
+
+            self.train_loader = torch.utils.data.DataLoader(
+                dataset=self.train_set, batch_size=self.args.train_batch_size, sampler=SubsetRandomSampler(subset_indices))
+            if self.args.validate:
+                self.validate_loader = torch.utils.data.DataLoader(
+                    dataset=self.train_set, batch_size=self.args.train_batch_size, sampler=SubsetRandomSampler(subset_indices))
+
+        if self.args.dataset == "CIFAR-10":
+            test_set = torchvision.datasets.CIFAR10(
+                root='../storage', train=False, download=True, transform=test_transform)
+        elif self.args.dataset == "CIFAR-100":
+            test_set = torchvision.datasets.CIFAR100(
+                root='../storage', train=False, download=True, transform=test_transform)
+
         self.test_loader = torch.utils.data.DataLoader(
             dataset=test_set, batch_size=self.args.test_batch_size, shuffle=False)
 
@@ -177,7 +231,7 @@ class Solver(object):
         else:
             self.scheduler = optim.lr_scheduler.MultiStepLR(
                 self.optimizer, milestones=self.args.lr_milestones, gamma=self.args.lr_gamma)
-        self.criterion = nn.CrossEntropyLoss().to(self.device)
+        self.criterion = nn.CrossEntropyLoss().half().to(self.device)
 
     def get_batch_plot_idx(self):
         self.batch_plot_idx += 1
@@ -211,25 +265,24 @@ class Solver(object):
             prediction = torch.max(output, 1)
             total += target.size(0)
 
-            correct += np.sum(prediction[1].cpu().numpy()
-                              == target.cpu().numpy())
+            correct += torch.sum(prediction[1] == target)
 
             pred_labels = torch.nn.functional.one_hot(
-                prediction[1], num_classes=10).cpu().numpy()
+                prediction[1], num_classes=10)
             true_labels = torch.nn.functional.one_hot(
-                target, num_classes=10).cpu().numpy()
+                target, num_classes=10)
 
             # True Positive (TP): we predict a label of 1 (positive), and the true label
-            TP += np.sum(np.logical_and(pred_labels == 1, true_labels == 1))
+            TP += torch.sum((pred_labels == 1) & (true_labels == 1))
 
             # True Negative (TN): we predict a label of 0 (negative), and the true label is 0.
-            TN += np.sum(np.logical_and(pred_labels == 0, true_labels == 0))
+            TN += torch.sum((pred_labels == 0) & (true_labels == 0))
 
             # False Positive (FP): we predict a label of 1 (positive), but the true label is 0.
-            FP += np.sum(np.logical_and(pred_labels == 1, true_labels == 0))
+            FP += torch.sum((pred_labels == 1) & (true_labels == 0))
 
             # False Negative (FN): we predict a label of 0 (negative), but the true label is 1.
-            FN += np.sum(np.logical_and(pred_labels == 0, true_labels == 1))
+            FN += torch.sum((pred_labels == 0) & (true_labels == 1))
 
             if self.args.progress_bar:
                 progress_bar(batch_num, len(self.train_loader), 'Loss: %.4f | Acc: %.3f%% (%d/%d)'
@@ -261,29 +314,24 @@ class Solver(object):
                 prediction = torch.max(output, 1)
                 total += target.size(0)
 
-                correct += np.sum(prediction[1].cpu().numpy()
-                                  == target.cpu().numpy())
+                correct += torch.sum(prediction[1] == target)
 
                 pred_labels = torch.nn.functional.one_hot(
-                    prediction[1], num_classes=10).cpu().numpy()
+                    prediction[1], num_classes=10)
                 true_labels = torch.nn.functional.one_hot(
-                    target, num_classes=10).cpu().numpy()
+                    target, num_classes=10)
 
                 # True Positive (TP): we predict a label of 1 (positive), and the true label
-                TP += np.sum(np.logical_and(pred_labels ==
-                                            1, true_labels == 1))
+                TP += torch.sum((pred_labels == 1) & (true_labels == 1))
 
                 # True Negative (TN): we predict a label of 0 (negative), and the true label is 0.
-                TN += np.sum(np.logical_and(pred_labels ==
-                                            0, true_labels == 0))
+                TN += torch.sum((pred_labels == 0) & (true_labels == 0))
 
                 # False Positive (FP): we predict a label of 1 (positive), but the true label is 0.
-                FP += np.sum(np.logical_and(pred_labels ==
-                                            1, true_labels == 0))
+                FP += torch.sum((pred_labels == 1) & (true_labels == 0))
 
                 # False Negative (FN): we predict a label of 0 (negative), but the true label is 1.
-                FN += np.sum(np.logical_and(pred_labels ==
-                                            0, true_labels == 1))
+                FN += torch.sum((pred_labels == 0) & (true_labels == 1))
 
                 if self.args.progress_bar:
                     progress_bar(batch_num, len(self.test_loader), 'Loss: %.4f | Acc: %.3f%% (%d/%d)'
@@ -316,89 +364,94 @@ class Solver(object):
             # Took the metrics from here: https://en.wikipedia.org/wiki/Precision_and_recall
             loss = train_result[0]
             accuracy = train_result[1]
-            TP = train_result[2]
-            TN = train_result[3]
-            FP = train_result[4]
-            FN = train_result[5]
-            TPR = TP/(TP+FN)
-            TNR = TN/(TN+FP)
-            PPV = TP/(TP+FP)
-            NPV = TN/(TN+FN)
-            FNR = FN/(FN+TP)
-            FPR = FP/(FP+TN)
-            FDR = FP/(FP+TP)
-            FOR = FN/(FN+TN)
-            TS = TP/(TP+FN+FP)
-            F1 = (2*TP)/(2*TP+FP+FN)
-            MCC = (TP*TN - FP*FN)/np.sqrt((TP+FP)*(TP+FN)*(TN+FP)*(TN+FN))
-            BM = TPR+TNR-1
-            MK = PPV+NPV-1
-
             self.writer.add_scalar("Train/Loss", loss, epoch)
             self.writer.add_scalar("Train/Accuracy", accuracy, epoch)
-            self.writer.add_scalar("Train/F1 score", F1, epoch)
-            self.writer.add_scalar("Train/Sensitivity", TPR, epoch)
-            self.writer.add_scalar("Train/Specificity", TNR, epoch)
-            self.writer.add_scalar("Train/Precision", PPV, epoch)
-            self.writer.add_scalar(
-                "Train/Negative predictive value", NPV, epoch)
-            self.writer.add_scalar("Train/Miss rate", FNR, epoch)
-            self.writer.add_scalar("Train/Fall-out", FPR, epoch)
-            self.writer.add_scalar("Train/False discovery rate ", FDR, epoch)
-            self.writer.add_scalar("Train/False omission rate ", FOR, epoch)
-            self.writer.add_scalar("Train/Threat score", TS, epoch)
-            self.writer.add_scalar("Train/TP", TP, epoch)
-            self.writer.add_scalar("Train/TN", TN, epoch)
-            self.writer.add_scalar("Train/FP", FP, epoch)
-            self.writer.add_scalar("Train/FN", FN, epoch)
-            self.writer.add_scalar(
-                "Train/Matthews correlation coefficient", MCC, epoch)
-            self.writer.add_scalar("Train/Informedness", BM, epoch)
-            self.writer.add_scalar("Train/Markedness", MK, epoch)
+            if self.args.all_metrics:
+                TP = train_result[2]
+                TN = train_result[3]
+                FP = train_result[4]
+                FN = train_result[5]
+                TPR = TP/(TP+FN)
+                TNR = TN/(TN+FP)
+                PPV = TP/(TP+FP)
+                NPV = TN/(TN+FN)
+                FNR = FN/(FN+TP)
+                FPR = FP/(FP+TN)
+                FDR = FP/(FP+TP)
+                FOR = FN/(FN+TN)
+                TS = TP/(TP+FN+FP)
+                F1 = (2*TP)/(2*TP+FP+FN)
+                MCC = (TP*TN - FP*FN)/np.sqrt((TP+FP)*(TP+FN)*(TN+FP)*(TN+FN))
+                BM = TPR+TNR-1
+                MK = PPV+NPV-1
+
+                self.writer.add_scalar("Train/F1 score", F1, epoch)
+                self.writer.add_scalar("Train/Sensitivity", TPR, epoch)
+                self.writer.add_scalar("Train/Specificity", TNR, epoch)
+                self.writer.add_scalar("Train/Precision", PPV, epoch)
+                self.writer.add_scalar(
+                    "Train/Negative predictive value", NPV, epoch)
+                self.writer.add_scalar("Train/Miss rate", FNR, epoch)
+                self.writer.add_scalar("Train/Fall-out", FPR, epoch)
+                self.writer.add_scalar(
+                    "Train/False discovery rate ", FDR, epoch)
+                self.writer.add_scalar(
+                    "Train/False omission rate ", FOR, epoch)
+                self.writer.add_scalar("Train/Threat score", TS, epoch)
+                self.writer.add_scalar("Train/TP", TP, epoch)
+                self.writer.add_scalar("Train/TN", TN, epoch)
+                self.writer.add_scalar("Train/FP", FP, epoch)
+                self.writer.add_scalar("Train/FN", FN, epoch)
+                self.writer.add_scalar(
+                    "Train/Matthews correlation coefficient", MCC, epoch)
+                self.writer.add_scalar("Train/Informedness", BM, epoch)
+                self.writer.add_scalar("Train/Markedness", MK, epoch)
 
             test_result = self.test()
 
             loss = test_result[0]
             accuracy = test_result[1]
-            TP = test_result[2]
-            TN = test_result[3]
-            FP = test_result[4]
-            FN = test_result[5]
-            TPR = TP/(TP+FN)
-            TNR = TN/(TN+FP)
-            PPV = TP/(TP+FP)
-            NPV = TN/(TN+FN)
-            FNR = FN/(FN+TP)
-            FPR = FP/(FP+TN)
-            FDR = FP/(FP+TP)
-            FOR = FN/(FN+TN)
-            TS = TP/(TP+FN+FP)
-            F1 = (2*TP)/(2*TP+FP+FN)
-            MCC = (TP*TN - FP*FN)/np.sqrt((TP+FP)*(TP+FN)*(TN+FP)*(TN+FN))
-            BM = TPR+TNR-1
-            MK = PPV+NPV-1
-
             self.writer.add_scalar("Test/Loss", loss, epoch)
             self.writer.add_scalar("Test/Accuracy", accuracy, epoch)
-            self.writer.add_scalar("Test/F1 score", F1, epoch)
-            self.writer.add_scalar("Test/Sensitivity", TPR, epoch)
-            self.writer.add_scalar("Test/Specificity", TNR, epoch)
-            self.writer.add_scalar("Test/Precision", PPV, epoch)
-            self.writer.add_scalar(
-                "Test/Negative predictive value", NPV, epoch)
-            self.writer.add_scalar("Test/Miss rate", FNR, epoch)
-            self.writer.add_scalar("Test/Fall-out", FPR, epoch)
-            self.writer.add_scalar("Test/False discovery rate ", FDR, epoch)
-            self.writer.add_scalar("Test/False omission rate ", FOR, epoch)
-            self.writer.add_scalar("Test/Threat score", TS, epoch)
-            self.writer.add_scalar("Test/TP", TP, epoch)
-            self.writer.add_scalar("Test/TN", TN, epoch)
-            self.writer.add_scalar("Test/FP", FP, epoch)
-            self.writer.add_scalar("Test/FN", FN, epoch)
-            self.writer.add_scalar(
-                "Test/Matthews correlation coefficient", MCC, epoch)
-            self.writer.add_scalar("Test/Informedness", BM, epoch)
-            self.writer.add_scalar("Test/Markedness", MK, epoch)
+            if self.args.all_metrics:
+                TP = test_result[2]
+                TN = test_result[3]
+                FP = test_result[4]
+                FN = test_result[5]
+                TPR = TP/(TP+FN)
+                TNR = TN/(TN+FP)
+                PPV = TP/(TP+FP)
+                NPV = TN/(TN+FN)
+                FNR = FN/(FN+TP)
+                FPR = FP/(FP+TN)
+                FDR = FP/(FP+TP)
+                FOR = FN/(FN+TN)
+                TS = TP/(TP+FN+FP)
+                F1 = (2*TP)/(2*TP+FP+FN)
+                MCC = (TP*TN - FP*FN)/np.sqrt((TP+FP)*(TP+FN)*(TN+FP)*(TN+FN))
+                BM = TPR+TNR-1
+                MK = PPV+NPV-1
+
+                self.writer.add_scalar("Test/F1 score", F1, epoch)
+                self.writer.add_scalar("Test/Sensitivity", TPR, epoch)
+                self.writer.add_scalar("Test/Specificity", TNR, epoch)
+                self.writer.add_scalar("Test/Precision", PPV, epoch)
+                self.writer.add_scalar(
+                    "Test/Negative predictive value", NPV, epoch)
+                self.writer.add_scalar("Test/Miss rate", FNR, epoch)
+                self.writer.add_scalar("Test/Fall-out", FPR, epoch)
+                self.writer.add_scalar(
+                    "Test/False discovery rate ", FDR, epoch)
+                self.writer.add_scalar("Test/False omission rate ", FOR, epoch)
+                self.writer.add_scalar("Test/Threat score", TS, epoch)
+                self.writer.add_scalar("Test/TP", TP, epoch)
+                self.writer.add_scalar("Test/TN", TN, epoch)
+                self.writer.add_scalar("Test/FP", FP, epoch)
+                self.writer.add_scalar("Test/FN", FN, epoch)
+                self.writer.add_scalar(
+                    "Test/Matthews correlation coefficient", MCC, epoch)
+                self.writer.add_scalar("Test/Informedness", BM, epoch)
+                self.writer.add_scalar("Test/Markedness", MK, epoch)
 
             self.writer.add_scalar("Model/Norm", self.get_model_norm(), epoch)
             self.writer.add_scalar(
