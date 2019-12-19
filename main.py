@@ -8,6 +8,7 @@ import torch.backends.cudnn as cudnn
 import torch.optim as optim
 import torch.nn as nn
 import torch.utils.data
+from torch.utils.data.sampler import SubsetRandomSampler
 import torchvision
 from tensorboardX import SummaryWriter
 from torchvision import transforms as transforms
@@ -201,10 +202,10 @@ class Solver(object):
                 if isinstance(m, nn.Conv2d):
                     fan_in = m.kernel_size[0] * \
                         m.kernel_size[1] * m.in_channels
-                    nn.init.normal(m.weight, 0, math.sqrt(1. / fan_in))
+                    nn.init.normal(m.weight, 0, torch.sqrt(1. / fan_in))
                 elif isinstance(m, nn.Linear):
                     fan_in = m.in_features
-                    nn.init.normal(m.weight, 0, math.sqrt(1. / fan_in))
+                    nn.init.normal(m.weight, 0, torch.sqrt(1. / fan_in))
         elif self.args.initialization == 4:
             # orthogonal initialization
             for m in self.model.modules():
