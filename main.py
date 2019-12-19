@@ -204,7 +204,7 @@ class Solver(object):
         self.model = eval(self.args.model)
         self.save_dir = "../storage/" + self.args.save_dir
         if not os.path.isdir(self.save_dir):
-            os.mkdir(self.save_dir)
+            os.makedirs(self.save_dir)
 
         if self.cuda:
             if self.args.half:
@@ -261,7 +261,10 @@ class Solver(object):
         else:
             self.scheduler = optim.lr_scheduler.MultiStepLR(
                 self.optimizer, milestones=self.args.lr_milestones, gamma=self.args.lr_gamma)
-        self.criterion = nn.CrossEntropyLoss().half().to(self.device)
+        if self.args.half:
+            self.criterion = nn.CrossEntropyLoss().half().to(self.device)
+        else:
+            self.criterion = nn.CrossEntropyLoss().to(self.device)
 
     def get_batch_plot_idx(self):
         self.batch_plot_idx += 1
