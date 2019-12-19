@@ -388,7 +388,7 @@ class Solver(object):
         self.load_data()
         self.load_model()
 
-        accuracy = 0
+        best_accuracy = 0
         try:
             for epoch in range(1, self.args.epoch + 1):
                 print("\n===> epoch: %d/%d" % (epoch, self.args.epoch))
@@ -491,13 +491,13 @@ class Solver(object):
                 self.writer.add_scalar(
                     "Train Params/Learning rate", self.scheduler.get_lr()[0], epoch)
 
-                if accuracy < test_result[1]:
-                    accuracy = test_result[1]
-                    self.save(epoch, accuracy)
-                    print("===> BEST ACC. PERFORMANCE: %.3f%%" % (accuracy * 100))
+                if best_accuracy < test_result[1]:
+                    best_accuracy = test_result[1]
+                    self.save(epoch, best_accuracy)
+                    print("===> BEST ACC. PERFORMANCE: %.3f%%" % (best_accuracy * 100))
 
                 if self.args.save_model and epoch % self.args.save_interval == 0:
-                    self.save(0, epoch)
+                    self.save(epoch, 0)
 
                 if self.args.use_reduce_lr:
                     self.scheduler.step(train_result[0])
@@ -509,15 +509,15 @@ class Solver(object):
         except KeyboardInterrupt:
             pass
         
-        print("===> BEST ACC. PERFORMANCE: %.3f%%" % (accuracy * 100))
+        print("===> BEST ACC. PERFORMANCE: %.3f%%" % (best_accuracy * 100))
         files = os.listdir(self.save_dir)
         paths = [os.path.join(self.save_dir, basename) for basename in files if "_0_" not in basename]
         if len(paths) > 0:
             src = max(paths, key=os.path.getctime)
-            copyfile(src, os.path.join(self.run_folder,self.args.save_dir,os.path.basename(src)))
+            copyfile(src, os.path.join("runs",self.args.save_dir,os.path.basename(src)))
             
-        with open(self.run_folder+"/"+self.args.save_dir+"/README.md", 'a+') as f:
-            f.write("\n## Accuracy\n %.3f%%" % (accuracy * 100))
+        with open("runs/"+self.args.save_dir+"/README.md", 'a+') as f:
+            f.write("\n## Accuracy\n %.3f%%" % (best_accuracy * 100))
         print("Saved best accuracy checkpoint")
 
 
