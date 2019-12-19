@@ -1,7 +1,8 @@
-# python main.py --lr=0.05 --lr_milestones 30 60 90 120 150 180 210 240 270 300 --lr_gamma=0.5 --wd=0.0005 --nesterov --momentum=0.9 --model="VGG('VGG11')" --epoch=300 --train_batch_size=128
+import sys
 import argparse
 import pickle
 import os
+from shutil import copyfile
 
 import numpy as np
 import torch.backends.cudnn as cudnn
@@ -13,12 +14,28 @@ import torchvision
 from tensorboardX import SummaryWriter
 from torchvision import transforms as transforms
 
-from learn_utils import reset_seed
+from learn_utils import reset_seed, EarlyStopping
 from misc import progress_bar
 from models import *
 
-CLASSES = ('plane', 'car', 'bird', 'cat', 'deer',
-           'dog', 'frog', 'horse', 'ship', 'truck')
+CIFAR_10_CLASSES = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
+CIFAR_100_CLASSES = (
+    'apple', 'aquarium_fish', 'baby', 'bear', 'beaver', 'bed', 'bee', 'beetle', 
+    'bicycle', 'bottle', 'bowl', 'boy', 'bridge', 'bus', 'butterfly', 'camel', 
+    'can', 'castle', 'caterpillar', 'cattle', 'chair', 'chimpanzee', 'clock', 
+    'cloud', 'cockroach', 'couch', 'crab', 'crocodile', 'cup', 'dinosaur', 
+    'dolphin', 'elephant', 'flatfish', 'forest', 'fox', 'girl', 'hamster', 
+    'house', 'kangaroo', 'keyboard', 'lamp', 'lawn_mower', 'leopard', 'lion',
+    'lizard', 'lobster', 'man', 'maple_tree', 'motorcycle', 'mountain', 'mouse',
+    'mushroom', 'oak_tree', 'orange', 'orchid', 'otter', 'palm_tree', 'pear',
+    'pickup_truck', 'pine_tree', 'plain', 'plate', 'poppy', 'porcupine',
+    'possum', 'rabbit', 'raccoon', 'ray', 'road', 'rocket', 'rose',
+    'sea', 'seal', 'shark', 'shrew', 'skunk', 'skyscraper', 'snail', 'snake',
+    'spider', 'squirrel', 'streetcar', 'sunflower', 'sweet_pepper', 'table',
+    'tank', 'telephone', 'television', 'tiger', 'tractor', 'train', 'trout',
+    'tulip', 'turtle', 'wardrobe', 'whale', 'willow_tree', 'wolf', 'woman',
+    'worm'
+)
 
 
 def main():
@@ -69,6 +86,7 @@ def main():
     parser.add_argument('--reduce_lr_min_lr', type=float,
                         default=0.0005, help='minimal lr')
     parser.add_argument('--lr_gamma', default=0.5, type=float, help='Lr gamma')
+    parser.add_argument('--es_patience', type=int, default=10000, help='Early stopping pacience')
 
     parser.add_argument('--num_workers_train', default=4,
                         type=int, help='number of workers for loading train data')
@@ -100,11 +118,22 @@ class Solver(object):
         self.cuda = config.cuda
         self.train_loader = None
         self.test_loader = None
+        self.es = EarlyStopping(patience=self.args.es_patience)
         if self.args.save_dir == "" or self.args.save_dir == None:
             self.writer = SummaryWriter()
         else:
             self.writer = SummaryWriter(log_dir="runs/"+self.args.save_dir)
+            with open("runs/"+self.args.save_dir+"/README.md", 'w+') as f:
+                f.write(' '.join(sys.argv[1:]))
         self.batch_plot_idx = 0
+
+        self.train_batch_plot_idx = 0
+        self.test_batch_plot_idx = 0
+        self.val_batch_plot_idx = 0
+        if self.args.dataset == "CIFAR-10":
+            self.nr_classes = len(CIFAR_10_CLASSES)
+        elif self.args.dataset == "CIFAR-100":
+            self.nr_classes = len(CIFAR_100_CLASSES)
 
     def load_data(self):
         if "CIFAR" in self.args.dataset:
@@ -357,118 +386,137 @@ class Solver(object):
         self.load_model()
 
         accuracy = 0
-        for epoch in range(1, self.args.epoch + 1):
-            print("\n===> epoch: %d/%d" % (epoch, self.args.epoch))
+        try:
+            for epoch in range(1, self.args.epoch + 1):
+                print("\n===> epoch: %d/%d" % (epoch, self.args.epoch))
 
-            train_result = self.train()
+                train_result = self.train()
 
-            # Took the metrics from here: https://en.wikipedia.org/wiki/Precision_and_recall
-            loss = train_result[0]
-            accuracy = train_result[1]
-            self.writer.add_scalar("Train/Loss", loss, epoch)
-            self.writer.add_scalar("Train/Accuracy", accuracy, epoch)
-            if self.args.all_metrics:
-                TP = train_result[2]
-                TN = train_result[3]
-                FP = train_result[4]
-                FN = train_result[5]
-                TPR = TP/(TP+FN)
-                TNR = TN/(TN+FP)
-                PPV = TP/(TP+FP)
-                NPV = TN/(TN+FN)
-                FNR = FN/(FN+TP)
-                FPR = FP/(FP+TN)
-                FDR = FP/(FP+TP)
-                FOR = FN/(FN+TN)
-                TS = TP/(TP+FN+FP)
-                F1 = (2*TP)/(2*TP+FP+FN)
-                MCC = (TP*TN - FP*FN)/np.sqrt((TP+FP)*(TP+FN)*(TN+FP)*(TN+FN))
-                BM = TPR+TNR-1
-                MK = PPV+NPV-1
+                # Took the metrics from here: https://en.wikipedia.org/wiki/Precision_and_recall
+                loss = train_result[0]
+                accuracy = train_result[1]
+                self.writer.add_scalar("Train/Loss", loss, epoch)
+                self.writer.add_scalar("Train/Accuracy", accuracy, epoch)
+                if self.args.all_metrics:
+                    TP = train_result[2]
+                    TN = train_result[3]
+                    FP = train_result[4]
+                    FN = train_result[5]
+                    TPR = TP/(TP+FN)
+                    TNR = TN/(TN+FP)
+                    PPV = TP/(TP+FP)
+                    NPV = TN/(TN+FN)
+                    FNR = FN/(FN+TP)
+                    FPR = FP/(FP+TN)
+                    FDR = FP/(FP+TP)
+                    FOR = FN/(FN+TN)
+                    TS = TP/(TP+FN+FP)
+                    F1 = (2*TP)/(2*TP+FP+FN)
+                    MCC = (TP*TN - FP*FN)/np.sqrt((TP+FP)*(TP+FN)*(TN+FP)*(TN+FN))
+                    BM = TPR+TNR-1
+                    MK = PPV+NPV-1
 
-                self.writer.add_scalar("Train/F1 score", F1, epoch)
-                self.writer.add_scalar("Train/Sensitivity", TPR, epoch)
-                self.writer.add_scalar("Train/Specificity", TNR, epoch)
-                self.writer.add_scalar("Train/Precision", PPV, epoch)
-                self.writer.add_scalar(
-                    "Train/Negative predictive value", NPV, epoch)
-                self.writer.add_scalar("Train/Miss rate", FNR, epoch)
-                self.writer.add_scalar("Train/Fall-out", FPR, epoch)
-                self.writer.add_scalar(
-                    "Train/False discovery rate ", FDR, epoch)
-                self.writer.add_scalar(
-                    "Train/False omission rate ", FOR, epoch)
-                self.writer.add_scalar("Train/Threat score", TS, epoch)
-                self.writer.add_scalar("Train/TP", TP, epoch)
-                self.writer.add_scalar("Train/TN", TN, epoch)
-                self.writer.add_scalar("Train/FP", FP, epoch)
-                self.writer.add_scalar("Train/FN", FN, epoch)
-                self.writer.add_scalar(
-                    "Train/Matthews correlation coefficient", MCC, epoch)
-                self.writer.add_scalar("Train/Informedness", BM, epoch)
-                self.writer.add_scalar("Train/Markedness", MK, epoch)
+                    self.writer.add_scalar("Train/F1 score", F1, epoch)
+                    self.writer.add_scalar("Train/Sensitivity", TPR, epoch)
+                    self.writer.add_scalar("Train/Specificity", TNR, epoch)
+                    self.writer.add_scalar("Train/Precision", PPV, epoch)
+                    self.writer.add_scalar(
+                        "Train/Negative predictive value", NPV, epoch)
+                    self.writer.add_scalar("Train/Miss rate", FNR, epoch)
+                    self.writer.add_scalar("Train/Fall-out", FPR, epoch)
+                    self.writer.add_scalar(
+                        "Train/False discovery rate ", FDR, epoch)
+                    self.writer.add_scalar(
+                        "Train/False omission rate ", FOR, epoch)
+                    self.writer.add_scalar("Train/Threat score", TS, epoch)
+                    self.writer.add_scalar("Train/TP", TP, epoch)
+                    self.writer.add_scalar("Train/TN", TN, epoch)
+                    self.writer.add_scalar("Train/FP", FP, epoch)
+                    self.writer.add_scalar("Train/FN", FN, epoch)
+                    self.writer.add_scalar(
+                        "Train/Matthews correlation coefficient", MCC, epoch)
+                    self.writer.add_scalar("Train/Informedness", BM, epoch)
+                    self.writer.add_scalar("Train/Markedness", MK, epoch)
 
-            test_result = self.test()
+                test_result = self.test()
 
-            loss = test_result[0]
-            accuracy = test_result[1]
-            self.writer.add_scalar("Test/Loss", loss, epoch)
-            self.writer.add_scalar("Test/Accuracy", accuracy, epoch)
-            if self.args.all_metrics:
-                TP = test_result[2]
-                TN = test_result[3]
-                FP = test_result[4]
-                FN = test_result[5]
-                TPR = TP/(TP+FN)
-                TNR = TN/(TN+FP)
-                PPV = TP/(TP+FP)
-                NPV = TN/(TN+FN)
-                FNR = FN/(FN+TP)
-                FPR = FP/(FP+TN)
-                FDR = FP/(FP+TP)
-                FOR = FN/(FN+TN)
-                TS = TP/(TP+FN+FP)
-                F1 = (2*TP)/(2*TP+FP+FN)
-                MCC = (TP*TN - FP*FN)/np.sqrt((TP+FP)*(TP+FN)*(TN+FP)*(TN+FN))
-                BM = TPR+TNR-1
-                MK = PPV+NPV-1
-
-                self.writer.add_scalar("Test/F1 score", F1, epoch)
-                self.writer.add_scalar("Test/Sensitivity", TPR, epoch)
-                self.writer.add_scalar("Test/Specificity", TNR, epoch)
-                self.writer.add_scalar("Test/Precision", PPV, epoch)
-                self.writer.add_scalar(
-                    "Test/Negative predictive value", NPV, epoch)
-                self.writer.add_scalar("Test/Miss rate", FNR, epoch)
-                self.writer.add_scalar("Test/Fall-out", FPR, epoch)
-                self.writer.add_scalar(
-                    "Test/False discovery rate ", FDR, epoch)
-                self.writer.add_scalar("Test/False omission rate ", FOR, epoch)
-                self.writer.add_scalar("Test/Threat score", TS, epoch)
-                self.writer.add_scalar("Test/TP", TP, epoch)
-                self.writer.add_scalar("Test/TN", TN, epoch)
-                self.writer.add_scalar("Test/FP", FP, epoch)
-                self.writer.add_scalar("Test/FN", FN, epoch)
-                self.writer.add_scalar(
-                    "Test/Matthews correlation coefficient", MCC, epoch)
-                self.writer.add_scalar("Test/Informedness", BM, epoch)
-                self.writer.add_scalar("Test/Markedness", MK, epoch)
-
-            self.writer.add_scalar("Model/Norm", self.get_model_norm(), epoch)
-            self.writer.add_scalar(
-                "Train Params/Learning rate", self.scheduler.get_lr()[0], epoch)
-
-            if accuracy < test_result[1]:
+                loss = test_result[0]
                 accuracy = test_result[1]
-                self.save(epoch, accuracy)
+                self.writer.add_scalar("Test/Loss", loss, epoch)
+                self.writer.add_scalar("Test/Accuracy", accuracy, epoch)
+                if self.args.all_metrics:
+                    TP = test_result[2]
+                    TN = test_result[3]
+                    FP = test_result[4]
+                    FN = test_result[5]
+                    TPR = TP/(TP+FN)
+                    TNR = TN/(TN+FP)
+                    PPV = TP/(TP+FP)
+                    NPV = TN/(TN+FN)
+                    FNR = FN/(FN+TP)
+                    FPR = FP/(FP+TN)
+                    FDR = FP/(FP+TP)
+                    FOR = FN/(FN+TN)
+                    TS = TP/(TP+FN+FP)
+                    F1 = (2*TP)/(2*TP+FP+FN)
+                    MCC = (TP*TN - FP*FN)/np.sqrt((TP+FP)*(TP+FN)*(TN+FP)*(TN+FN))
+                    BM = TPR+TNR-1
+                    MK = PPV+NPV-1
 
-            if self.args.save_model and epoch % self.args.save_interval == 0:
-                self.save(0, epoch)
+                    self.writer.add_scalar("Test/F1 score", F1, epoch)
+                    self.writer.add_scalar("Test/Sensitivity", TPR, epoch)
+                    self.writer.add_scalar("Test/Specificity", TNR, epoch)
+                    self.writer.add_scalar("Test/Precision", PPV, epoch)
+                    self.writer.add_scalar(
+                        "Test/Negative predictive value", NPV, epoch)
+                    self.writer.add_scalar("Test/Miss rate", FNR, epoch)
+                    self.writer.add_scalar("Test/Fall-out", FPR, epoch)
+                    self.writer.add_scalar(
+                        "Test/False discovery rate ", FDR, epoch)
+                    self.writer.add_scalar("Test/False omission rate ", FOR, epoch)
+                    self.writer.add_scalar("Test/Threat score", TS, epoch)
+                    self.writer.add_scalar("Test/TP", TP, epoch)
+                    self.writer.add_scalar("Test/TN", TN, epoch)
+                    self.writer.add_scalar("Test/FP", FP, epoch)
+                    self.writer.add_scalar("Test/FN", FN, epoch)
+                    self.writer.add_scalar(
+                        "Test/Matthews correlation coefficient", MCC, epoch)
+                    self.writer.add_scalar("Test/Informedness", BM, epoch)
+                    self.writer.add_scalar("Test/Markedness", MK, epoch)
 
-            if self.args.use_reduce_lr:
-                self.scheduler.step(train_result[0])
-            else:
-                self.scheduler.step(epoch)
+                self.writer.add_scalar("Model/Norm", self.get_model_norm(), epoch)
+                self.writer.add_scalar(
+                    "Train Params/Learning rate", self.scheduler.get_lr()[0], epoch)
+
+                if accuracy < test_result[1]:
+                    accuracy = test_result[1]
+                    self.save(epoch, accuracy)
+                    print("===> BEST ACC. PERFORMANCE: %.3f%%" % (accuracy * 100))
+
+                if self.args.save_model and epoch % self.args.save_interval == 0:
+                    self.save(0, epoch)
+
+                if self.args.use_reduce_lr:
+                    self.scheduler.step(train_result[0])
+                else:
+                    self.scheduler.step(epoch)
+
+                if self.es.step(train_result[0]):
+                        raise KeyboardInterrupt
+        except KeyboardInterrupt:
+            pass
+        
+        print("===> BEST ACC. PERFORMANCE: %.3f%%" % (accuracy * 100))
+        files = os.listdir(self.save_dir)
+        paths = [os.path.join(self.save_dir, basename) for basename in files if "_0_" not in basename]
+        if len(paths) > 0:
+            src = max(paths, key=os.path.getctime)
+            copyfile(src, os.path.join(self.run_folder,self.args.save_dir,os.path.basename(src)))
+            
+        with open(self.run_folder+"/"+self.args.save_dir+"/README.md", 'a+') as f:
+            f.write("\n## Accuracy\n %.3f%%" % (accuracy * 100))
+        print("Saved best accuracy checkpoint")
+
 
     def get_model_norm(self, norm_type=2):
         norm = 0.0
