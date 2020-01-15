@@ -256,7 +256,7 @@ class Solver(object):
 
         if self.cuda:
             if self.args.half:
-                self.model, self.optimizer = amp.initialize(self.model, self.optimizer, opt_level="O1")
+                self.model, self.optimizer = amp.initialize(self.model, self.optimizer, opt_level=f"O{self.args.mixpo}", patch_torch_functions=True,keep_batchnorm_fp32=True)
 
     def get_batch_plot_idx(self):
         self.batch_plot_idx += 1
