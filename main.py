@@ -18,6 +18,15 @@ from learn_utils import reset_seed, EarlyStopping
 from misc import progress_bar
 from models import *
 
+try:
+    from apex.parallel import DistributedDataParallel as DDP
+    from apex.fp16_utils import *
+    from apex import amp, optimizers
+    from apex.multi_tensor_apply import multi_tensor_applier
+except ImportError:
+    pass
+
+
 CIFAR_10_CLASSES = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
 CIFAR_100_CLASSES = (
     'apple', 'aquarium_fish', 'baby', 'bear', 'beaver', 'bed', 'bee', 'beetle', 
@@ -44,36 +53,25 @@ def main():
                         type=str, help='what model to use')
     parser.add_argument('--dataset', default="CIFAR-10", type=str, choices=[
                         "CIFAR-10", "CIFAR-100"], help='What dataset to use. Options: CIFAR-10, CIFAR-100')
-    parser.add_argument('--half', '-hf', action='store_true',
-                        help='use half precision')
-    parser.add_argument('--load_model', default="",
-                        type=str, help='what model to load')
+    parser.add_argument('--half', '-hf', action='store_true',help='use half precision')
+    parser.add_argument('--mixpo',help='What Apex AMP opt level to use:\n 0 - FP32 training \n 1 - Conservative Mixed Precision, only some whitelist ops are done in FP16 \n 2 - Fast Mixed Precision, this is the standard mixed precision training. It maintains FP32 master weights and optimizer.step acts directly on the FP32 master weights \n 3 - FP16 training')
+    parser.add_argument('--load_model', default="",type=str, help='what model to load')
 
     parser.add_argument('--lr', default=0.01, type=float, help='learning rate')
     parser.add_argument('--wd', default=0.0, type=float, help='weight decay')
-    parser.add_argument('--momentum', default=0.0,
-                        type=float, help='sgd momentum')
-    parser.add_argument('--nesterov', action='store_true',
-                        help='Use nesterov momentum')
-    parser.add_argument('--epoch', default=200, type=int,
-                        help='number of epochs tp train for')
-    parser.add_argument('--train_batch_size', default=128,
-                        type=int, help='training batch size')
-    parser.add_argument('--test_batch_size', default=512,
-                        type=int, help='testing batch size')
-    parser.add_argument('--train_subset', default=None,
-                        type=int, help='Number of samples to train on')
+    parser.add_argument('--momentum', default=0.0,type=float, help='sgd momentum')
+    parser.add_argument('--nesterov', action='store_true',help='Use nesterov momentum')
+    parser.add_argument('--epoch', default=200, type=int,help='number of epochs tp train for')
+    parser.add_argument('--train_batch_size', default=128,type=int, help='training batch size')
+    parser.add_argument('--test_batch_size', default=512,type=int, help='testing batch size')
+    parser.add_argument('--train_subset', default=None,type=int, help='Number of samples to train on')
     parser.add_argument('--initialization', '-init', default=0, type=int,
                         help='The type of initialization to be used \n 0 - Default pytorch initialization \n 1 - Xavier Initialization\n 2 - He et. al Initialization\n 3 - SELU Initialization\n 4 - Orthogonal Initialization')
-    parser.add_argument('--initialization_batch_norm', '-init_batch',
-                        action='store_true', help='use batch norm initialization')
+    parser.add_argument('--initialization_batch_norm', '-init_batch',action='store_true', help='use batch norm initialization')
 
-    parser.add_argument('--save_model', '-save',
-                        action='store_true', help='perform_top_down_sum')
-    parser.add_argument('--save_interval', default=5,
-                        type=int, help='perform_top_down_sum')
-    parser.add_argument('--save_dir', default="checkpoints",
-                        type=str, help='save dir name')
+    parser.add_argument('--save_model', '-save',action='store_true', help='perform_top_down_sum')
+    parser.add_argument('--save_interval', default=5,type=int, help='perform_top_down_sum')
+    parser.add_argument('--save_dir', default="checkpoints",type=str, help='save dir name')
 
     parser.add_argument('--lr_milestones', nargs='+', type=int,
                         default=[30, 60, 90, 120, 150], help='Lr Milestones')
@@ -97,7 +95,7 @@ def main():
                         help="In addition to accuracy and loss calculate all metrics available")
     parser.add_argument('--cuda', default=torch.cuda.is_available(),
                         type=bool, help='whether cuda is in use')
-    parser.add_argument('--seed', default=0, type=int,
+    parser.add_argument('--seed', default=None, type=int,
                         help='Seed to be used by randomizer')
     parser.add_argument('--progress_bar', '-pb',
                         action='store_true', help='Show the progress bar')
@@ -206,14 +204,6 @@ class Solver(object):
         if not os.path.isdir(self.save_dir):
             os.makedirs(self.save_dir)
 
-        if self.cuda:
-            if self.args.half:
-                self.model.half()
-                for layer in self.model.modules():
-                    if isinstance(layer, nn.BatchNorm2d):
-                        layer.float()
-                print("Using half precision")
-
         if self.args.initialization == 1:
             # xavier init
             for m in self.model.modules():
@@ -261,10 +251,12 @@ class Solver(object):
         else:
             self.scheduler = optim.lr_scheduler.MultiStepLR(
                 self.optimizer, milestones=self.args.lr_milestones, gamma=self.args.lr_gamma)
-        if self.args.half:
-            self.criterion = nn.CrossEntropyLoss().half().to(self.device)
-        else:
-            self.criterion = nn.CrossEntropyLoss().to(self.device)
+        
+        self.criterion = nn.CrossEntropyLoss().to(self.device)
+
+        if self.cuda:
+            if self.args.half:
+                self.model, self.optimizer = amp.initialize(self.model, self.optimizer, opt_level="O1")
 
     def get_batch_plot_idx(self):
         self.batch_plot_idx += 1
@@ -283,38 +275,30 @@ class Solver(object):
 
         for batch_num, (data, target) in enumerate(self.train_loader):
             data, target = data.to(self.device), target.to(self.device)
-            if self.device == torch.device('cuda') and self.args.half:
-                data = data.half()
             self.optimizer.zero_grad()
 
             output = self.model(data)
             loss = self.criterion(output, target)
-            loss.backward()
+            if self.args.half:
+                with amp.scale_loss(loss, self.optimizer) as scaled_loss:
+                    scaled_loss.backward()
+            else:
+                loss.backward()
             self.optimizer.step()
             total_loss += loss.item()
-            self.writer.add_scalar(
-                "Train/Batch Loss", loss.item(), self.get_batch_plot_idx())
-            # second param "1" represents the dimension to be reduced
+            self.writer.add_scalar("Train/Batch Loss", loss.item(), self.get_batch_plot_idx())
+
             prediction = torch.max(output, 1)
             total += target.size(0)
 
             correct += torch.sum(prediction[1] == target)
 
-            pred_labels = torch.nn.functional.one_hot(
-                prediction[1], num_classes=10)
-            true_labels = torch.nn.functional.one_hot(
-                target, num_classes=10)
+            pred_labels = torch.nn.functional.one_hot(prediction[1], num_classes=10)
+            true_labels = torch.nn.functional.one_hot(target, num_classes=10)
 
-            # True Positive (TP): we predict a label of 1 (positive), and the true label
             TP += torch.sum((pred_labels == 1) & (true_labels == 1))
-
-            # True Negative (TN): we predict a label of 0 (negative), and the true label is 0.
             TN += torch.sum((pred_labels == 0) & (true_labels == 0))
-
-            # False Positive (FP): we predict a label of 1 (positive), but the true label is 0.
             FP += torch.sum((pred_labels == 1) & (true_labels == 0))
-
-            # False Negative (FN): we predict a label of 0 (negative), but the true label is 1.
             FN += torch.sum((pred_labels == 0) & (true_labels == 1))
 
             if self.args.progress_bar:
@@ -337,33 +321,21 @@ class Solver(object):
         with torch.no_grad():
             for batch_num, (data, target) in enumerate(self.test_loader):
                 data, target = data.to(self.device), target.to(self.device)
-                if self.device == torch.device('cuda') and self.args.half:
-                    data = data.half()
                 output = self.model(data)
                 loss = self.criterion(output, target)
-                self.writer.add_scalar(
-                    "Test/Batch Loss", loss.item(), self.get_batch_plot_idx())
+                self.writer.add_scalar("Test/Batch Loss", loss.item(), self.get_batch_plot_idx())
                 total_loss += loss.item()
                 prediction = torch.max(output, 1)
                 total += target.size(0)
 
                 correct += torch.sum(prediction[1] == target)
 
-                pred_labels = torch.nn.functional.one_hot(
-                    prediction[1], num_classes=10)
-                true_labels = torch.nn.functional.one_hot(
-                    target, num_classes=10)
+                pred_labels = torch.nn.functional.one_hot(prediction[1], num_classes=10)
+                true_labels = torch.nn.functional.one_hot(target, num_classes=10)
 
-                # True Positive (TP): we predict a label of 1 (positive), and the true label
                 TP += torch.sum((pred_labels == 1) & (true_labels == 1))
-
-                # True Negative (TN): we predict a label of 0 (negative), and the true label is 0.
                 TN += torch.sum((pred_labels == 0) & (true_labels == 0))
-
-                # False Positive (FP): we predict a label of 1 (positive), but the true label is 0.
                 FP += torch.sum((pred_labels == 1) & (true_labels == 0))
-
-                # False Negative (FN): we predict a label of 0 (negative), but the true label is 1.
                 FN += torch.sum((pred_labels == 0) & (true_labels == 1))
 
                 if self.args.progress_bar:
@@ -384,7 +356,8 @@ class Solver(object):
         print("Checkpoint saved to {}".format(model_out_path))
 
     def run(self):
-        reset_seed(self.args.seed)
+        if not self.args.seed is None: 
+            reset_seed(self.args.seed)
         self.load_data()
         self.load_model()
 
@@ -423,21 +396,17 @@ class Solver(object):
                     self.writer.add_scalar("Train/Sensitivity", TPR, epoch)
                     self.writer.add_scalar("Train/Specificity", TNR, epoch)
                     self.writer.add_scalar("Train/Precision", PPV, epoch)
-                    self.writer.add_scalar(
-                        "Train/Negative predictive value", NPV, epoch)
+                    self.writer.add_scalar("Train/Negative predictive value", NPV, epoch)
                     self.writer.add_scalar("Train/Miss rate", FNR, epoch)
                     self.writer.add_scalar("Train/Fall-out", FPR, epoch)
-                    self.writer.add_scalar(
-                        "Train/False discovery rate ", FDR, epoch)
-                    self.writer.add_scalar(
-                        "Train/False omission rate ", FOR, epoch)
+                    self.writer.add_scalar("Train/False discovery rate ", FDR, epoch)
+                    self.writer.add_scalar("Train/False omission rate ", FOR, epoch)
                     self.writer.add_scalar("Train/Threat score", TS, epoch)
                     self.writer.add_scalar("Train/TP", TP, epoch)
                     self.writer.add_scalar("Train/TN", TN, epoch)
                     self.writer.add_scalar("Train/FP", FP, epoch)
                     self.writer.add_scalar("Train/FN", FN, epoch)
-                    self.writer.add_scalar(
-                        "Train/Matthews correlation coefficient", MCC, epoch)
+                    self.writer.add_scalar("Train/Matthews correlation coefficient", MCC, epoch)
                     self.writer.add_scalar("Train/Informedness", BM, epoch)
                     self.writer.add_scalar("Train/Markedness", MK, epoch)
 
@@ -470,26 +439,22 @@ class Solver(object):
                     self.writer.add_scalar("Test/Sensitivity", TPR, epoch)
                     self.writer.add_scalar("Test/Specificity", TNR, epoch)
                     self.writer.add_scalar("Test/Precision", PPV, epoch)
-                    self.writer.add_scalar(
-                        "Test/Negative predictive value", NPV, epoch)
+                    self.writer.add_scalar("Test/Negative predictive value", NPV, epoch)
                     self.writer.add_scalar("Test/Miss rate", FNR, epoch)
                     self.writer.add_scalar("Test/Fall-out", FPR, epoch)
-                    self.writer.add_scalar(
-                        "Test/False discovery rate ", FDR, epoch)
+                    self.writer.add_scalar("Test/False discovery rate ", FDR, epoch)
                     self.writer.add_scalar("Test/False omission rate ", FOR, epoch)
                     self.writer.add_scalar("Test/Threat score", TS, epoch)
                     self.writer.add_scalar("Test/TP", TP, epoch)
                     self.writer.add_scalar("Test/TN", TN, epoch)
                     self.writer.add_scalar("Test/FP", FP, epoch)
                     self.writer.add_scalar("Test/FN", FN, epoch)
-                    self.writer.add_scalar(
-                        "Test/Matthews correlation coefficient", MCC, epoch)
+                    self.writer.add_scalar("Test/Matthews correlation coefficient", MCC, epoch)
                     self.writer.add_scalar("Test/Informedness", BM, epoch)
                     self.writer.add_scalar("Test/Markedness", MK, epoch)
 
                 self.writer.add_scalar("Model/Norm", self.get_model_norm(), epoch)
-                self.writer.add_scalar(
-                    "Train Params/Learning rate", self.scheduler.get_lr()[0], epoch)
+                self.writer.add_scalar("Train Params/Learning rate", self.scheduler.get_lr()[0], epoch)
 
                 if best_accuracy < test_result[1]:
                     best_accuracy = test_result[1]
