@@ -291,7 +291,7 @@ class Solver(object):
             prediction = torch.max(output, 1)
             total += target.size(0)
 
-            correct += torch.sum(prediction[1] == target)
+            correct += torch.sum((prediction[1] == target).float())
 
             pred_labels = torch.nn.functional.one_hot(prediction[1], num_classes=10)
             true_labels = torch.nn.functional.one_hot(target, num_classes=10)
@@ -328,7 +328,7 @@ class Solver(object):
                 prediction = torch.max(output, 1)
                 total += target.size(0)
 
-                correct += torch.sum(prediction[1] == target)
+                correct += torch.sum((prediction[1] == target).float())
 
                 pred_labels = torch.nn.functional.one_hot(prediction[1], num_classes=10)
                 true_labels = torch.nn.functional.one_hot(target, num_classes=10)
@@ -454,7 +454,7 @@ class Solver(object):
                     self.writer.add_scalar("Test/Markedness", MK, epoch)
 
                 self.writer.add_scalar("Model/Norm", self.get_model_norm(), epoch)
-                self.writer.add_scalar("Train Params/Learning rate", self.scheduler.get_lr()[0], epoch)
+                self.writer.add_scalar("Train Params/Learning rate", self.scheduler.get_last_lr()[0], epoch)
 
                 if best_accuracy < test_result[1]:
                     best_accuracy = test_result[1]
@@ -467,7 +467,7 @@ class Solver(object):
                 if self.args.use_reduce_lr:
                     self.scheduler.step(train_result[0])
                 else:
-                    self.scheduler.step(epoch)
+                    self.scheduler.step()
 
                 if self.es.step(train_result[0]):
                         raise KeyboardInterrupt
