@@ -1,4 +1,5 @@
 import sys
+import pprint
 import argparse
 import pickle
 import os
@@ -34,23 +35,22 @@ except ImportError:
     from yaml import Loader, Dumper
 
 def main():
+    class Empty(object):
+        pass
+
     parser = argparse.ArgumentParser(description="cifar-10 with PyTorch")
     parser.add_argument('--config_path', default="config.yaml",
                         type=str, help='what config file to use')
 
     config_path = parser.parse_args().config_path
-
-
-    class Empty(object):
-        pass
-
     config = load(open(config_path, "r"), Loader)
-    print(config)
+    with open("runs/" + config["save_dir"] + "/README.md", 'w+') as f:
+        f.write(dump(config))
     params = Empty()
     params.__dict__.update(config)
+
     solver = Solver(params)
     solver.run()
-
 
 class Solver(object):
     def __init__(self, config):
@@ -67,9 +67,8 @@ class Solver(object):
         if self.args.save_dir == "" or self.args.save_dir == None:
             self.writer = SummaryWriter()
         else:
-            self.writer = SummaryWriter(log_dir="runs/"+self.args.save_dir)
-            with open("runs/"+self.args.save_dir+"/README.md", 'w+') as f:
-                f.write(' '.join(sys.argv[1:]))
+            self.writer = SummaryWriter(log_dir="runs/" + self.args.save_dir)
+
         self.batch_plot_idx = 0
 
         self.train_batch_plot_idx = 0
@@ -151,39 +150,7 @@ class Solver(object):
         if not os.path.isdir(self.save_dir):
             os.makedirs(self.save_dir)
 
-        if self.args.initialization == 1:
-            # xavier init
-            for m in self.model.modules():
-                if isinstance(m, (nn.Conv2d, nn.Linear)):
-                    nn.init.xavier_uniform(
-                        m.weight, gain=nn.init.calculate_gain('relu'))
-        elif self.args.initialization == 2:
-            # he initialization
-            for m in self.model.modules():
-                if isinstance(m, (nn.Conv2d, nn.Linear)):
-                    nn.init.kaiming_normal(m.weight, mode='fan_in')
-        elif self.args.initialization == 3:
-            # selu init
-            for m in self.model.modules():
-                if isinstance(m, nn.Conv2d):
-                    fan_in = m.kernel_size[0] * \
-                        m.kernel_size[1] * m.in_channels
-                    nn.init.normal(m.weight, 0, torch.sqrt(1. / fan_in))
-                elif isinstance(m, nn.Linear):
-                    fan_in = m.in_features
-                    nn.init.normal(m.weight, 0, torch.sqrt(1. / fan_in))
-        elif self.args.initialization == 4:
-            # orthogonal initialization
-            for m in self.model.modules():
-                if isinstance(m, (nn.Conv2d, nn.Linear)):
-                    nn.init.orthogonal(m.weight)
-
-        if self.args.initialization_batch_norm:
-            # batch norm initialization
-            for m in self.model.modules():
-                if isinstance(m, nn.BatchNorm2d):
-                    nn.init.constant(m.weight, 1)
-                    nn.init.constant(m.bias, 0)
+        self.init_model()
 
         if len(self.args.load_model) > 0:
             print("Loading model from " + self.args.load_model)
@@ -214,10 +181,6 @@ class Solver(object):
         self.model.train()
         total_loss = 0
         correct = 0
-        TP = 0
-        TN = 0
-        FP = 0
-        FN = 0
         total = 0
 
         for batch_num, (data, target) in enumerate(self.train_loader):
@@ -238,31 +201,19 @@ class Solver(object):
             prediction = torch.max(output, 1)
             total += target.size(0)
 
-            correct += torch.sum((prediction[1] == target).float())
-
-            pred_labels = torch.nn.functional.one_hot(prediction[1], num_classes=10)
-            true_labels = torch.nn.functional.one_hot(target, num_classes=10)
-
-            TP += torch.sum((pred_labels == 1) & (true_labels == 1))
-            TN += torch.sum((pred_labels == 0) & (true_labels == 0))
-            FP += torch.sum((pred_labels == 1) & (true_labels == 0))
-            FN += torch.sum((pred_labels == 0) & (true_labels == 1))
+            correct += torch.sum((prediction[1] == target).float()).item()
 
             if self.args.progress_bar:
                 progress_bar(batch_num, len(self.train_loader), 'Loss: %.4f | Acc: %.3f%% (%d/%d)'
                              % (total_loss / (batch_num + 1), 100.0 * correct/total, correct, total))
 
-        return total_loss, correct / total, TP, TN, FP, FN
+        return total_loss, correct / total
 
     def test(self):
         print("test:")
         self.model.eval()
         total_loss = 0
         correct = 0
-        TP = 0
-        TN = 0
-        FP = 0
-        FN = 0
         total = 0
 
         with torch.no_grad():
@@ -275,21 +226,13 @@ class Solver(object):
                 prediction = torch.max(output, 1)
                 total += target.size(0)
 
-                correct += torch.sum((prediction[1] == target).float())
-
-                pred_labels = torch.nn.functional.one_hot(prediction[1], num_classes=10)
-                true_labels = torch.nn.functional.one_hot(target, num_classes=10)
-
-                TP += torch.sum((pred_labels == 1) & (true_labels == 1))
-                TN += torch.sum((pred_labels == 0) & (true_labels == 0))
-                FP += torch.sum((pred_labels == 1) & (true_labels == 0))
-                FN += torch.sum((pred_labels == 0) & (true_labels == 1))
+                correct += torch.sum((prediction[1] == target).float()).item()
 
                 if self.args.progress_bar:
                     progress_bar(batch_num, len(self.test_loader), 'Loss: %.4f | Acc: %.3f%% (%d/%d)'
                                  % (total_loss / (batch_num + 1), 100. * correct / total, correct, total))
 
-        return total_loss, correct/total, TP, TN, FP, FN
+        return total_loss, correct/total
 
     def save(self, epoch, accuracy, tag=None):
         if tag != None:
@@ -315,47 +258,10 @@ class Solver(object):
 
                 train_result = self.train()
 
-                # Took the metrics from here: https://en.wikipedia.org/wiki/Precision_and_recall
                 loss = train_result[0]
                 accuracy = train_result[1]
                 self.writer.add_scalar("Train/Loss", loss, epoch)
                 self.writer.add_scalar("Train/Accuracy", accuracy, epoch)
-                if self.args.all_metrics:
-                    TP = train_result[2]
-                    TN = train_result[3]
-                    FP = train_result[4]
-                    FN = train_result[5]
-                    TPR = TP/(TP+FN)
-                    TNR = TN/(TN+FP)
-                    PPV = TP/(TP+FP)
-                    NPV = TN/(TN+FN)
-                    FNR = FN/(FN+TP)
-                    FPR = FP/(FP+TN)
-                    FDR = FP/(FP+TP)
-                    FOR = FN/(FN+TN)
-                    TS = TP/(TP+FN+FP)
-                    F1 = (2*TP)/(2*TP+FP+FN)
-                    MCC = (TP*TN - FP*FN)/np.sqrt((TP+FP)*(TP+FN)*(TN+FP)*(TN+FN))
-                    BM = TPR+TNR-1
-                    MK = PPV+NPV-1
-
-                    self.writer.add_scalar("Train/F1 score", F1, epoch)
-                    self.writer.add_scalar("Train/Sensitivity", TPR, epoch)
-                    self.writer.add_scalar("Train/Specificity", TNR, epoch)
-                    self.writer.add_scalar("Train/Precision", PPV, epoch)
-                    self.writer.add_scalar("Train/Negative predictive value", NPV, epoch)
-                    self.writer.add_scalar("Train/Miss rate", FNR, epoch)
-                    self.writer.add_scalar("Train/Fall-out", FPR, epoch)
-                    self.writer.add_scalar("Train/False discovery rate ", FDR, epoch)
-                    self.writer.add_scalar("Train/False omission rate ", FOR, epoch)
-                    self.writer.add_scalar("Train/Threat score", TS, epoch)
-                    self.writer.add_scalar("Train/TP", TP, epoch)
-                    self.writer.add_scalar("Train/TN", TN, epoch)
-                    self.writer.add_scalar("Train/FP", FP, epoch)
-                    self.writer.add_scalar("Train/FN", FN, epoch)
-                    self.writer.add_scalar("Train/Matthews correlation coefficient", MCC, epoch)
-                    self.writer.add_scalar("Train/Informedness", BM, epoch)
-                    self.writer.add_scalar("Train/Markedness", MK, epoch)
 
                 test_result = self.test()
 
@@ -363,42 +269,6 @@ class Solver(object):
                 accuracy = test_result[1]
                 self.writer.add_scalar("Test/Loss", loss, epoch)
                 self.writer.add_scalar("Test/Accuracy", accuracy, epoch)
-                if self.args.all_metrics:
-                    TP = test_result[2]
-                    TN = test_result[3]
-                    FP = test_result[4]
-                    FN = test_result[5]
-                    TPR = TP/(TP+FN)
-                    TNR = TN/(TN+FP)
-                    PPV = TP/(TP+FP)
-                    NPV = TN/(TN+FN)
-                    FNR = FN/(FN+TP)
-                    FPR = FP/(FP+TN)
-                    FDR = FP/(FP+TP)
-                    FOR = FN/(FN+TN)
-                    TS = TP/(TP+FN+FP)
-                    F1 = (2*TP)/(2*TP+FP+FN)
-                    MCC = (TP*TN - FP*FN)/np.sqrt((TP+FP)*(TP+FN)*(TN+FP)*(TN+FN))
-                    BM = TPR+TNR-1
-                    MK = PPV+NPV-1
-
-                    self.writer.add_scalar("Test/F1 score", F1, epoch)
-                    self.writer.add_scalar("Test/Sensitivity", TPR, epoch)
-                    self.writer.add_scalar("Test/Specificity", TNR, epoch)
-                    self.writer.add_scalar("Test/Precision", PPV, epoch)
-                    self.writer.add_scalar("Test/Negative predictive value", NPV, epoch)
-                    self.writer.add_scalar("Test/Miss rate", FNR, epoch)
-                    self.writer.add_scalar("Test/Fall-out", FPR, epoch)
-                    self.writer.add_scalar("Test/False discovery rate ", FDR, epoch)
-                    self.writer.add_scalar("Test/False omission rate ", FOR, epoch)
-                    self.writer.add_scalar("Test/Threat score", TS, epoch)
-                    self.writer.add_scalar("Test/TP", TP, epoch)
-                    self.writer.add_scalar("Test/TN", TN, epoch)
-                    self.writer.add_scalar("Test/FP", FP, epoch)
-                    self.writer.add_scalar("Test/FN", FN, epoch)
-                    self.writer.add_scalar("Test/Matthews correlation coefficient", MCC, epoch)
-                    self.writer.add_scalar("Test/Informedness", BM, epoch)
-                    self.writer.add_scalar("Test/Markedness", MK, epoch)
 
                 self.writer.add_scalar("Model/Norm", self.get_model_norm(), epoch)
                 self.writer.add_scalar("Train Params/Learning rate", self.scheduler.get_last_lr()[0], epoch)
@@ -438,6 +308,41 @@ class Solver(object):
         for param in self.model.parameters():
             norm += torch.norm(input=param, p=norm_type, dtype=torch.float)
         return norm
+
+    def init_model(self):
+        if self.args.initialization == 1:
+            # xavier init
+            for m in self.model.modules():
+                if isinstance(m, (nn.Conv2d, nn.Linear)):
+                    nn.init.xavier_uniform(
+                        m.weight, gain=nn.init.calculate_gain('relu'))
+        elif self.args.initialization == 2:
+            # he initialization
+            for m in self.model.modules():
+                if isinstance(m, (nn.Conv2d, nn.Linear)):
+                    nn.init.kaiming_normal(m.weight, mode='fan_in')
+        elif self.args.initialization == 3:
+            # selu init
+            for m in self.model.modules():
+                if isinstance(m, nn.Conv2d):
+                    fan_in = m.kernel_size[0] * \
+                        m.kernel_size[1] * m.in_channels
+                    nn.init.normal(m.weight, 0, torch.sqrt(1. / fan_in))
+                elif isinstance(m, nn.Linear):
+                    fan_in = m.in_features
+                    nn.init.normal(m.weight, 0, torch.sqrt(1. / fan_in))
+        elif self.args.initialization == 4:
+            # orthogonal initialization
+            for m in self.model.modules():
+                if isinstance(m, (nn.Conv2d, nn.Linear)):
+                    nn.init.orthogonal(m.weight)
+
+        if self.args.initialization_batch_norm:
+            # batch norm initialization
+            for m in self.model.modules():
+                if isinstance(m, nn.BatchNorm2d):
+                    nn.init.constant(m.weight, 1)
+                    nn.init.constant(m.bias, 0)
 
 
 if __name__ == '__main__':
