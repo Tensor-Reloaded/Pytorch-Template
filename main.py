@@ -20,7 +20,6 @@ from learn_utils import *
 from misc import progress_bar
 from models import *
 
-
 try:
     from apex.parallel import DistributedDataParallel as DDP
     from apex.fp16_utils import *
@@ -34,6 +33,7 @@ try:
 except ImportError:
     from yaml import Loader, Dumper
 
+
 def main():
     class Empty(object):
         pass
@@ -44,13 +44,16 @@ def main():
 
     config_path = parser.parse_args().config_path
     config = load(open(config_path, "r"), Loader)
-    with open("runs/" + config["save_dir"] + "/README.md", 'w+') as f:
+    save_config_path = "runs/" + config["save_dir"]
+    os.makedirs(save_config_path, exist_ok=True)
+    with open(os.path.join(save_config_path, "README.md"), 'w+') as f:
         f.write(dump(config))
     params = Empty()
     params.__dict__.update(config)
 
     solver = Solver(params)
     solver.run()
+
 
 class Solver(object):
     def __init__(self, config):
@@ -110,7 +113,7 @@ class Solver(object):
                     subset_indices = pickle.load(f)
             else:
                 subset_indices = []
-                per_class = self.args.train_subset//self.nr_classes
+                per_class = self.args.train_subset // self.nr_classes
                 targets = torch.tensor(self.train_set.targets)
                 for i in range(self.nr_classes):
                     idx = (targets == i).nonzero().view(-1)
@@ -121,12 +124,13 @@ class Solver(object):
                 with open(filename, 'wb') as f:
                     pickle.dump(subset_indices, f)
             subset_indices = torch.LongTensor(subset_indices)
-
             self.train_loader = torch.utils.data.DataLoader(
-                dataset=self.train_set, batch_size=self.args.train_batch_size, sampler=SubsetRandomSampler(subset_indices))
+                dataset=self.train_set, batch_size=self.args.train_batch_size,
+                sampler=SubsetRandomSampler(subset_indices))
             if self.args.validate:
                 self.validate_loader = torch.utils.data.DataLoader(
-                    dataset=self.train_set, batch_size=self.args.train_batch_size, sampler=SubsetRandomSampler(subset_indices))
+                    dataset=self.train_set, batch_size=self.args.train_batch_size,
+                    sampler=SubsetRandomSampler(subset_indices))
 
         if self.args.dataset == "CIFAR-10":
             test_set = torchvision.datasets.CIFAR10(
@@ -140,7 +144,7 @@ class Solver(object):
 
     def load_model(self):
         if self.cuda:
-            self.device = torch.device('cuda')
+            self.device = torch.device('cuda' + ":" + str(self.args.cuda_device))
             cudnn.benchmark = True
         else:
             self.device = torch.device('cpu')
@@ -149,9 +153,7 @@ class Solver(object):
         self.save_dir = "../storage/" + self.args.save_dir
         if not os.path.isdir(self.save_dir):
             os.makedirs(self.save_dir)
-
         self.init_model()
-
         if len(self.args.load_model) > 0:
             print("Loading model from " + self.args.load_model)
             self.model.load_state_dict(torch.load(self.args.load_model))
@@ -161,16 +163,18 @@ class Solver(object):
         ), lr=self.args.lr, momentum=self.args.momentum, weight_decay=self.args.wd, nesterov=self.args.nesterov)
         if self.args.use_reduce_lr:
             self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-                self.optimizer, mode='min', factor=self.args.lr_gamma, patience=self.args.reduce_lr_patience, min_lr=self.args.reduce_lr_min_lr, verbose=True, threshold=self.args.reduce_lr_delta)
+                self.optimizer, mode='min', factor=self.args.lr_gamma, patience=self.args.reduce_lr_patience,
+                min_lr=self.args.reduce_lr_min_lr, verbose=True, threshold=self.args.reduce_lr_delta)
         else:
             self.scheduler = optim.lr_scheduler.MultiStepLR(
                 self.optimizer, milestones=self.args.lr_milestones, gamma=self.args.lr_gamma)
-        
+
         self.criterion = nn.CrossEntropyLoss().to(self.device)
 
         if self.cuda:
             if self.args.half:
-                self.model, self.optimizer = amp.initialize(self.model, self.optimizer, opt_level=f"O{self.args.mixpo}", patch_torch_functions=True,keep_batchnorm_fp32=True)
+                self.model, self.optimizer = amp.initialize(self.model, self.optimizer, opt_level=f"O{self.args.mixpo}",
+                                                            patch_torch_functions=True, keep_batchnorm_fp32=True)
 
     def get_batch_plot_idx(self):
         self.batch_plot_idx += 1
@@ -246,7 +250,7 @@ class Solver(object):
         print("Checkpoint saved to {}".format(model_out_path))
 
     def run(self):
-        if not self.args.seed is None: 
+        if not self.args.seed is None:
             reset_seed(self.args.seed)
         self.load_data()
         self.load_model()
@@ -287,21 +291,20 @@ class Solver(object):
                     self.scheduler.step()
 
                 if self.es.step(train_result[0]):
-                        raise KeyboardInterrupt
+                    raise KeyboardInterrupt
         except KeyboardInterrupt:
             pass
-        
+
         print("===> BEST ACC. PERFORMANCE: %.3f%%" % (best_accuracy * 100))
         files = os.listdir(self.save_dir)
         paths = [os.path.join(self.save_dir, basename) for basename in files if "_0_" not in basename]
         if len(paths) > 0:
             src = max(paths, key=os.path.getctime)
-            copyfile(src, os.path.join("runs",self.args.save_dir,os.path.basename(src)))
-            
-        with open("runs/"+self.args.save_dir+"/README.md", 'a+') as f:
+            copyfile(src, os.path.join("runs", self.args.save_dir, os.path.basename(src)))
+
+        with open("runs/" + self.args.save_dir + "/README.md", 'a+') as f:
             f.write("\n## Accuracy\n %.3f%%" % (best_accuracy * 100))
         print("Saved best accuracy checkpoint")
-
 
     def get_model_norm(self, norm_type=2):
         norm = 0.0

@@ -27,5 +27,6 @@ num_workers_train: 4
 num_workers_test: 2
 all_metrics: False
 cuda: True
+cuda_device: 0
 seed:
 progress_bar: False
