@@ -3,6 +3,7 @@ import argparse
 import pickle
 import os
 from shutil import copyfile
+from yaml import load, dump
 
 import numpy as np
 import torch.backends.cudnn as cudnn
@@ -14,9 +15,10 @@ import torchvision
 from tensorboardX import SummaryWriter
 from torchvision import transforms as transforms
 
-from learn_utils import reset_seed, EarlyStopping
+from learn_utils import *
 from misc import progress_bar
 from models import *
+
 
 try:
     from apex.parallel import DistributedDataParallel as DDP
@@ -26,82 +28,27 @@ try:
 except ImportError:
     pass
 
-
-CIFAR_10_CLASSES = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
-CIFAR_100_CLASSES = (
-    'apple', 'aquarium_fish', 'baby', 'bear', 'beaver', 'bed', 'bee', 'beetle', 
-    'bicycle', 'bottle', 'bowl', 'boy', 'bridge', 'bus', 'butterfly', 'camel', 
-    'can', 'castle', 'caterpillar', 'cattle', 'chair', 'chimpanzee', 'clock', 
-    'cloud', 'cockroach', 'couch', 'crab', 'crocodile', 'cup', 'dinosaur', 
-    'dolphin', 'elephant', 'flatfish', 'forest', 'fox', 'girl', 'hamster', 
-    'house', 'kangaroo', 'keyboard', 'lamp', 'lawn_mower', 'leopard', 'lion',
-    'lizard', 'lobster', 'man', 'maple_tree', 'motorcycle', 'mountain', 'mouse',
-    'mushroom', 'oak_tree', 'orange', 'orchid', 'otter', 'palm_tree', 'pear',
-    'pickup_truck', 'pine_tree', 'plain', 'plate', 'poppy', 'porcupine',
-    'possum', 'rabbit', 'raccoon', 'ray', 'road', 'rocket', 'rose',
-    'sea', 'seal', 'shark', 'shrew', 'skunk', 'skyscraper', 'snail', 'snake',
-    'spider', 'squirrel', 'streetcar', 'sunflower', 'sweet_pepper', 'table',
-    'tank', 'telephone', 'television', 'tiger', 'tractor', 'train', 'trout',
-    'tulip', 'turtle', 'wardrobe', 'whale', 'willow_tree', 'wolf', 'woman',
-    'worm'
-)
-
+try:
+    from yaml import CLoader as Loader, CDumper as Dumper
+except ImportError:
+    from yaml import Loader, Dumper
 
 def main():
     parser = argparse.ArgumentParser(description="cifar-10 with PyTorch")
-    parser.add_argument('--model', default="VGG('VGG19')",
-                        type=str, help='what model to use')
-    parser.add_argument('--dataset', default="CIFAR-10", type=str, choices=[
-                        "CIFAR-10", "CIFAR-100"], help='What dataset to use. Options: CIFAR-10, CIFAR-100')
-    parser.add_argument('--half', '-hf', action='store_true',help='use half precision')
-    parser.add_argument('--mixpo',help='What Apex AMP opt level to use:\n 0 - FP32 training \n 1 - Conservative Mixed Precision, only some whitelist ops are done in FP16 \n 2 - Fast Mixed Precision, this is the standard mixed precision training. It maintains FP32 master weights and optimizer.step acts directly on the FP32 master weights \n 3 - FP16 training')
-    parser.add_argument('--load_model', default="",type=str, help='what model to load')
+    parser.add_argument('--config_path', default="config.yaml",
+                        type=str, help='what config file to use')
 
-    parser.add_argument('--lr', default=0.01, type=float, help='learning rate')
-    parser.add_argument('--wd', default=0.0, type=float, help='weight decay')
-    parser.add_argument('--momentum', default=0.0,type=float, help='sgd momentum')
-    parser.add_argument('--nesterov', action='store_true',help='Use nesterov momentum')
-    parser.add_argument('--epoch', default=200, type=int,help='number of epochs tp train for')
-    parser.add_argument('--train_batch_size', default=128,type=int, help='training batch size')
-    parser.add_argument('--test_batch_size', default=512,type=int, help='testing batch size')
-    parser.add_argument('--train_subset', default=None,type=int, help='Number of samples to train on')
-    parser.add_argument('--initialization', '-init', default=0, type=int,
-                        help='The type of initialization to be used \n 0 - Default pytorch initialization \n 1 - Xavier Initialization\n 2 - He et. al Initialization\n 3 - SELU Initialization\n 4 - Orthogonal Initialization')
-    parser.add_argument('--initialization_batch_norm', '-init_batch',action='store_true', help='use batch norm initialization')
+    config_path = parser.parse_args().config_path
 
-    parser.add_argument('--save_model', '-save',action='store_true', help='perform_top_down_sum')
-    parser.add_argument('--save_interval', default=5,type=int, help='perform_top_down_sum')
-    parser.add_argument('--save_dir', default="checkpoints",type=str, help='save dir name')
 
-    parser.add_argument('--lr_milestones', nargs='+', type=int,
-                        default=[30, 60, 90, 120, 150], help='Lr Milestones')
-    parser.add_argument('--use_reduce_lr', action='store_true',
-                        help='Use reduce lr on plateou')
-    parser.add_argument('--reduce_lr_patience', type=int,
-                        default=20, help='reduce lr patience')
-    parser.add_argument('--reduce_lr_delta', type=float,
-                        default=0.02, help='minimal difference to improve losss')
-    parser.add_argument('--reduce_lr_min_lr', type=float,
-                        default=0.0005, help='minimal lr')
-    parser.add_argument('--lr_gamma', default=0.5, type=float, help='Lr gamma')
-    parser.add_argument('--es_patience', type=int, default=10000, help='Early stopping pacience')
+    class Empty(object):
+        pass
 
-    parser.add_argument('--num_workers_train', default=4,
-                        type=int, help='number of workers for loading train data')
-    parser.add_argument('--num_workers_test', default=2,
-                        type=int, help='number of workers for loading test data')
-
-    parser.add_argument('--all_metrics', action='store_true',
-                        help="In addition to accuracy and loss calculate all metrics available")
-    parser.add_argument('--cuda', default=torch.cuda.is_available(),
-                        type=bool, help='whether cuda is in use')
-    parser.add_argument('--seed', default=None, type=int,
-                        help='Seed to be used by randomizer')
-    parser.add_argument('--progress_bar', '-pb',
-                        action='store_true', help='Show the progress bar')
-    args = parser.parse_args()
-
-    solver = Solver(args)
+    config = load(open(config_path, "r"), Loader)
+    print(config)
+    params = Empty()
+    params.__dict__.update(config)
+    solver = Solver(params)
     solver.run()
 
 
