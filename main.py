@@ -20,12 +20,15 @@ from learn_utils import *
 from misc import progress_bar
 from models import *
 
+APEX_MISSING = False
 try:
     from apex.parallel import DistributedDataParallel as DDP
     from apex.fp16_utils import *
     from apex import amp, optimizers
     from apex.multi_tensor_apply import multi_tensor_applier
 except ImportError:
+    print("Apex not found on the system, it won't be using half-precision")
+    APEX_MISSING = True
     pass
 
 try:
@@ -50,7 +53,7 @@ def main():
         f.write(dump(config))
     params = Empty()
     params.__dict__.update(config)
-
+    params.half = False
     solver = Solver(params)
     solver.run()
 
