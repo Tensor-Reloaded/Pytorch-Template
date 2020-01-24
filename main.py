@@ -53,7 +53,8 @@ def main():
         f.write(dump(config))
     params = Empty()
     params.__dict__.update(config)
-    params.half = False
+    if APEX_MISSING:
+        params.half = False
     solver = Solver(params)
     solver.run()
 
