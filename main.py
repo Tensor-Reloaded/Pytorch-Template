@@ -1,3 +1,4 @@
+import collections
 import sys
 import pprint
 import argparse
@@ -37,10 +38,23 @@ except ImportError:
     from yaml import Loader, Dumper
 
 
-def main():
+def yaml_dict_to_params(config):
+    """ Transforms a config dict {'a': 'b', ...} to an object such that params.a == 'b' """
+
     class Empty(object):
         pass
 
+    params = Empty()
+    for k, v in config.items():
+        if isinstance(v, collections.Mapping):
+            params.__dict__[k] = yaml_dict_to_params(v)
+        else:
+            params.__dict__[k] = v
+
+    return params
+
+
+def main():
     parser = argparse.ArgumentParser(description="cifar-10 with PyTorch")
     parser.add_argument('--config_path', default="config.yaml",
                         type=str, help='what config file to use')
@@ -51,10 +65,11 @@ def main():
     os.makedirs(save_config_path, exist_ok=True)
     with open(os.path.join(save_config_path, "README.md"), 'w+') as f:
         f.write(dump(config))
-    params = Empty()
-    params.__dict__.update(config)
+
+    params = yaml_dict_to_params(config)
     if APEX_MISSING:
         params.half = False
+
     solver = Solver(params)
     solver.run()
 
