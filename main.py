@@ -46,7 +46,7 @@ def yaml_dict_to_params(config):
 
     params = Empty()
     for k, v in config.items():
-        if isinstance(v, collections.Mapping):
+        if isinstance(v, collections.abc.Mapping):
             params.__dict__[k] = yaml_dict_to_params(v)
         else:
             params.__dict__[k] = v
@@ -56,11 +56,11 @@ def yaml_dict_to_params(config):
 
 def main():
     parser = argparse.ArgumentParser(description="cifar-10 with PyTorch")
-    parser.add_argument('--config_path', default="config.yaml",
+    parser.add_argument('--config_path', default="sample.yaml",
                         type=str, help='what config file to use')
 
     config_path = parser.parse_args().config_path
-    config = load(open(config_path, "r"), Loader)
+    config = load(open("experiments/"+config_path, "r"), Loader)
     save_config_path = "runs/" + config["save_dir"]
     os.makedirs(save_config_path, exist_ok=True)
     with open(os.path.join(save_config_path, "README.md"), 'w+') as f:
