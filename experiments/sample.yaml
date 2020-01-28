@@ -1,7 +1,7 @@
 model: "VGG('VGG19')"
 dataset: "CIFAR-10"
 half: False
-mixpo: False
+mixpo: 1
 load_model: ""
 lr: 0.01
 wd: 0.0
