@@ -56,10 +56,18 @@ def yaml_dict_to_params(config):
 
 def main():
     parser = argparse.ArgumentParser(description="cifar-10 with PyTorch")
-    parser.add_argument('--config_path', default="sample.yaml",
+    parser.add_argument('--config_path', default=None,
                         type=str, help='what config file to use')
 
-    config_path = parser.parse_args().config_path
+    config_path = parser.parse_known_args()[0].config_path
+    if config_path is None:
+        config_path = "sample.yaml"
+        if len(sys.argv) == 2:
+            config_path = sys.argv[1]
+
+    if not os.path.isfile("experiments/"+config_path) and not config_path.endswith(".yaml"):
+        config_path+='.yaml'
+        
     config = load(open("experiments/"+config_path, "r"), Loader)
     save_config_path = "runs/" + config["save_dir"]
     os.makedirs(save_config_path, exist_ok=True)
