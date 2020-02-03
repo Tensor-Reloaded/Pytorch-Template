@@ -11,6 +11,7 @@ import numpy as np
 import torch.backends.cudnn as cudnn
 import torch.optim as optim
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.utils.data
 from torch.utils.data.sampler import SubsetRandomSampler
 import torchvision
