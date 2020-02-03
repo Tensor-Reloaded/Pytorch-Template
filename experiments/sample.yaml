@@ -4,7 +4,7 @@ half: False
 mixpo: 1
 load_model: ""
 lr: 0.05
-wd: 0.00005
+wd: 0.0001
 momentum: 0.9
 nesterov: True
 epoch: 200
