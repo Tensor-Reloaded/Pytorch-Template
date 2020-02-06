@@ -325,7 +325,7 @@ class Solver(object):
 
         print("===> BEST ACC. PERFORMANCE: %.3f%%" % (best_accuracy * 100))
         files = os.listdir(self.save_dir)
-        paths = [os.path.join(self.save_dir, basename) for basename in files if "_0_" not in basename]
+        paths = [os.path.join(self.save_dir, basename) for basename in files if "_0" not in basename]
         if len(paths) > 0:
             src = max(paths, key=os.path.getctime)
             copyfile(src, os.path.join("runs", self.args.save_dir, os.path.basename(src)))
