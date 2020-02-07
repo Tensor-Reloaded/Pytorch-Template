@@ -16,8 +16,8 @@ initialization_batch_norm: False
 save_model: False
 save_interval: 5
 save_dir: "checkpoints"
+scheduler: "MultiStepLR" # ReduceLROnPlateau | CosineAnnealingLR | MultiStepLR
 lr_milestones: [30, 60, 90, 120,150]
-use_reduce_lr: False
 reduce_lr_patience: 20
 reduce_lr_delta: 0.02
 reduce_lr_min_lr: 0.0005
