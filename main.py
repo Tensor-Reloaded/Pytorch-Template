@@ -245,7 +245,8 @@ class Solver(object):
             if self.args.progress_bar:
                 progress_bar(batch_num, len(self.train_loader), 'Loss: %.4f | Acc: %.3f%% (%d/%d)'
                              % (total_loss / (batch_num + 1), 100.0 * correct/total, correct, total))
-
+            if self.scheduler == "OneCycleLR":
+                self.scheduler.step()
         return total_loss, correct / total
 
     def test(self):
@@ -320,8 +321,10 @@ class Solver(object):
                 if self.args.save_model and epoch % self.args.save_interval == 0:
                     self.save(epoch, 0)
 
-                if self.args.use_reduce_lr:
+                if self.args.scheduler == "MultiStepLR":
                     self.scheduler.step(train_result[0])
+                elif self.args.scheduler == "OneCycleLR":
+                    pass
                 else:
                     self.scheduler.step()
 
