@@ -188,11 +188,11 @@ class Solver(object):
         self.model = self.model.to(self.device)
 
         self.optimizer = optim.SGD(self.model.parameters(), lr=self.args.lr, momentum=self.args.momentum, weight_decay=self.args.wd, nesterov=self.args.nesterov)
-        if self.args.scheduler == "ReduceLROnPlateau"
+        if self.args.scheduler == "ReduceLROnPlateau":
             self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
                 self.optimizer, mode='min', factor=self.args.lr_gamma, patience=self.args.reduce_lr_patience,
                 min_lr=self.args.reduce_lr_min_lr, verbose=True, threshold=self.args.reduce_lr_delta)
-        elif self.args.scheduler == "CosineAnnealingLR"
+        elif self.args.scheduler == "CosineAnnealingLR":
             if self.args.sum_augmentation:
                 self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer,T_max=self.args.epoch//(self.args.sum_groups-1),eta_min=self.args.reduce_lr_min_lr)
             else:
@@ -245,7 +245,7 @@ class Solver(object):
             if self.args.progress_bar:
                 progress_bar(batch_num, len(self.train_loader), 'Loss: %.4f | Acc: %.3f%% (%d/%d)'
                              % (total_loss / (batch_num + 1), 100.0 * correct/total, correct, total))
-            if self.scheduler == "OneCycleLR":
+            if self.args.scheduler == "OneCycleLR":
                 self.scheduler.step()
         return total_loss, correct / total
 
