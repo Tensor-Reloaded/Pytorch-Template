@@ -5,7 +5,6 @@ import argparse
 import pickle
 import os
 from shutil import copyfile
-from yaml import load, dump
 
 import numpy as np
 import torch.backends.cudnn as cudnn
@@ -17,6 +16,8 @@ from torch.utils.data.sampler import SubsetRandomSampler
 import torchvision
 from tensorboardX import SummaryWriter
 from torchvision import transforms as transforms
+import hydra
+from omegaconf import DictConfig
 
 from learn_utils import *
 from misc import progress_bar
@@ -33,53 +34,18 @@ except ImportError:
     APEX_MISSING = True
     pass
 
-try:
-    from yaml import CLoader as Loader, CDumper as Dumper
-except ImportError:
-    from yaml import Loader, Dumper
 
-
-def yaml_dict_to_params(config):
-    """ Transforms a config dict {'a': 'b', ...} to an object such that params.a == 'b' """
-
-    class Empty(object):
-        pass
-
-    params = Empty()
-    for k, v in config.items():
-        if isinstance(v, collections.abc.Mapping):
-            params.__dict__[k] = yaml_dict_to_params(v)
-        else:
-            params.__dict__[k] = v
-
-    return params
-
-
-def main():
-    parser = argparse.ArgumentParser(description="cifar-10 with PyTorch")
-    parser.add_argument('--config_path', default=None,
-                        type=str, help='what config file to use')
-
-    config_path = parser.parse_known_args()[0].config_path
-    if config_path is None:
-        config_path = "sample.yaml"
-        if len(sys.argv) == 2:
-            config_path = sys.argv[1]
-
-    if not os.path.isfile("experiments/"+config_path) and not config_path.endswith(".yaml"):
-        config_path+='.yaml'
-        
-    config = load(open("experiments/"+config_path, "r"), Loader)
-    save_config_path = "runs/" + config["save_dir"]
+@hydra.main('experiments/sample.yaml', strict=True)
+def main(config: DictConfig):
+    save_config_path = "runs/" + config.save_dir
     os.makedirs(save_config_path, exist_ok=True)
     with open(os.path.join(save_config_path, "README.md"), 'w+') as f:
-        f.write(dump(config))
+        f.write(config.pretty())
 
-    params = yaml_dict_to_params(config)
     if APEX_MISSING:
-        params.half = False
+        config.half = False
 
-    solver = Solver(params)
+    solver = Solver(config)
     solver.run()
 
 
@@ -95,7 +61,7 @@ class Solver(object):
         self.train_loader = None
         self.test_loader = None
         self.es = EarlyStopping(patience=self.args.es_patience)
-        if self.args.save_dir == "" or self.args.save_dir == None:
+        if not self.args.save_dir:
             self.writer = SummaryWriter()
         else:
             self.writer = SummaryWriter(log_dir="runs/" + self.args.save_dir)
@@ -130,7 +96,7 @@ class Solver(object):
             self.train_set = torchvision.datasets.CIFAR100(
                 root='../storage', train=True, download=True, transform=train_transform)
 
-        if self.args.train_subset == None:
+        if self.args.train_subset is None:
             self.train_loader = torch.utils.data.DataLoader(
                 dataset=self.train_set, batch_size=self.args.train_batch_size, shuffle=True)
         else:
@@ -286,7 +252,7 @@ class Solver(object):
         print("Checkpoint saved to {}".format(model_out_path))
 
     def run(self):
-        if not self.args.seed is None:
+        if self.args.seed is not None:
             reset_seed(self.args.seed)
         self.load_data()
         self.load_model()
