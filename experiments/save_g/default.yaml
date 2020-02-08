@@ -1,0 +1,3 @@
+save_model: False
+save_interval: 5
+save_dir: "checkpoints"
