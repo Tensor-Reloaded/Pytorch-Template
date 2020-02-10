@@ -295,6 +295,7 @@ class Solver(object):
                     self.scheduler.step()
 
                 if self.es.step(train_result[0]):
+                    print("Early stopping")
                     raise KeyboardInterrupt
         except KeyboardInterrupt:
             pass
