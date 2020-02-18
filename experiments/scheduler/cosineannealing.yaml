@@ -1,0 +1,2 @@
+scheduler_name: "CosineAnnealingLR"
+nr_cycle: 8

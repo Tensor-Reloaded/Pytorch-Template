@@ -1,8 +1,0 @@
-lr: 0.05
-scheduler: "MultiStepLR" # ReduceLROnPlateau | CosineAnnealingLR | MultiStepLR | OneCycleLR
-lr_milestones: [30, 60, 90, 120,150]
-reduce_lr_patience: 20
-reduce_lr_delta: 0.02
-reduce_lr_min_lr: 0.0005
-lr_gamma: 0.5
-es_patience: 10000

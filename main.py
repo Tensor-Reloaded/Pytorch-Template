@@ -17,6 +17,7 @@ import torchvision
 from tensorboardX import SummaryWriter
 from torchvision import transforms as transforms
 import hydra
+from hydra import utils
 from omegaconf import DictConfig
 
 from learn_utils import *
@@ -35,8 +36,12 @@ except ImportError:
     pass
 
 
-@hydra.main('experiments/sample.yaml', strict=True)
+storage_dir = "../storage/"
+
+@hydra.main('experiments/config.yaml', strict=True)
 def main(config: DictConfig):
+    global storage_dir
+    storage_dir = os.path.dirname(utils.get_original_cwd()) + "/storage/"
     save_config_path = "runs/" + config.save_dir
     os.makedirs(save_config_path, exist_ok=True)
     with open(os.path.join(save_config_path, "README.md"), 'w+') as f:
@@ -91,10 +96,10 @@ class Solver(object):
 
         if self.args.dataset == "CIFAR-10":
             self.train_set = torchvision.datasets.CIFAR10(
-                root='../storage', train=True, download=True, transform=train_transform)
+                root=storage_dir, train=True, download=True, transform=train_transform)
         elif self.args.dataset == "CIFAR-100":
             self.train_set = torchvision.datasets.CIFAR100(
-                root='../storage', train=True, download=True, transform=train_transform)
+                root=storage_dir, train=True, download=True, transform=train_transform)
 
         if self.args.train_subset is None:
             self.train_loader = torch.utils.data.DataLoader(
@@ -128,10 +133,10 @@ class Solver(object):
 
         if self.args.dataset == "CIFAR-10":
             test_set = torchvision.datasets.CIFAR10(
-                root='../storage', train=False, download=True, transform=test_transform)
+                root=storage_dir, train=False, download=True, transform=test_transform)
         elif self.args.dataset == "CIFAR-100":
             test_set = torchvision.datasets.CIFAR100(
-                root='../storage', train=False, download=True, transform=test_transform)
+                root=storage_dir, train=False, download=True, transform=test_transform)
 
         self.test_loader = torch.utils.data.DataLoader(
             dataset=test_set, batch_size=self.args.test_batch_size, shuffle=False)
@@ -144,7 +149,7 @@ class Solver(object):
             self.device = torch.device('cpu')
 
         self.model = eval(self.args.model)
-        self.save_dir = "../storage/" + self.args.save_dir
+        self.save_dir = storage_dir + self.args.save_dir
         if not os.path.isdir(self.save_dir):
             os.makedirs(self.save_dir)
         self.init_model()
@@ -160,13 +165,13 @@ class Solver(object):
                 min_lr=self.args.reduce_lr_min_lr, verbose=True, threshold=self.args.reduce_lr_delta)
         elif self.args.scheduler == "CosineAnnealingLR":
             if self.args.sum_augmentation:
-                self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer,T_max=self.args.epoch//(self.args.sum_groups-1),eta_min=self.args.reduce_lr_min_lr)
+                self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer,T_max=self.args.epoch//(self.args.nr_cycle-1),eta_min=self.args.reduce_lr_min_lr)
             else:
                 self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer,T_max=self.args.epoch,eta_min=self.args.reduce_lr_min_lr)
         elif self.args.scheduler == "MultiStepLR":
             self.scheduler = optim.lr_scheduler.MultiStepLR(self.optimizer, milestones=self.args.lr_milestones, gamma=self.args.lr_gamma)
         elif self.args.scheduler == "OneCycleLR":
-            self.scheduler = optim.lr_scheduler.OneCycleLR(self.optimizer,max_lr=self.args.lr, total_steps=None, epochs=self.args.epoch//(self.args.sum_groups-1), steps_per_epoch=len(self.train_loader), pct_start=0.3, anneal_strategy='cos', cycle_momentum=True, base_momentum=0.85, max_momentum=0.95, div_factor=10.0, final_div_factor=500.0, last_epoch=-1)
+            self.scheduler = optim.lr_scheduler.OneCycleLR(self.optimizer,max_lr=self.args.lr, total_steps=None, epochs=self.args.epoch//(self.args.nr_cycle-1), steps_per_epoch=len(self.train_loader), pct_start=0.3, anneal_strategy='cos', cycle_momentum=True, base_momentum=0.85, max_momentum=0.95, div_factor=10.0, final_div_factor=500.0, last_epoch=-1)
         else:
             print("This scheduler is not implemented, go ahead an commit one")
 
@@ -201,7 +206,7 @@ class Solver(object):
                 loss.backward()
             self.optimizer.step()
             total_loss += loss.item()
-            self.writer.add_scalar("Train/Batch Loss", loss.item(), self.get_batch_plot_idx())
+            self.writer.add_scalar("Train/Batch_Loss", loss.item(), self.get_batch_plot_idx())
 
             prediction = torch.max(output, 1)
             total += target.size(0)
@@ -227,7 +232,7 @@ class Solver(object):
                 data, target = data.to(self.device), target.to(self.device)
                 output = self.model(data)
                 loss = self.criterion(output, target)
-                self.writer.add_scalar("Test/Batch Loss", loss.item(), self.get_batch_plot_idx())
+                self.writer.add_scalar("Test/Batch_Loss", loss.item(), self.get_batch_plot_idx())
                 total_loss += loss.item()
                 prediction = torch.max(output, 1)
                 total += target.size(0)
@@ -277,7 +282,7 @@ class Solver(object):
                 self.writer.add_scalar("Test/Accuracy", accuracy, epoch)
 
                 self.writer.add_scalar("Model/Norm", self.get_model_norm(), epoch)
-                self.writer.add_scalar("Train Params/Learning rate", self.scheduler.get_last_lr()[0], epoch)
+                self.writer.add_scalar("Train_Params/Learning_rate", self.scheduler.get_last_lr()[0], epoch)
 
                 if best_accuracy < test_result[1]:
                     best_accuracy = test_result[1]

@@ -1,0 +1,3 @@
+scheduler_name: "MultiStepLR"
+lr_milestones: [30, 60, 90, 120,150]
+lr_gamma: 0.5

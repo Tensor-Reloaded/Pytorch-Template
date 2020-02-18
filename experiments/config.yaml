@@ -1,0 +1,18 @@
+defaults:
+  - common: default
+  - model: PreResNet
+  - dataset: cifar10
+  - optimizer: baseline
+  - initializer: default
+  - save: default
+  - scheduler: milestones
+  - specific: baseline
+  - dataset_model_specific: ${defaults.2.dataset}/${defaults.7.specific}/${defaults.1.model}
+    optional: true
+
+model: ${model_name}(${model_depth})
+dataset: ${dataset_name}
+scheduler: ${scheduler_name}
+
+load_model: ""
+es_patience: 100000

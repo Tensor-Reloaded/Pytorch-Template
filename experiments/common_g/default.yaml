@@ -1,5 +1,0 @@
-num_workers_train: 4
-num_workers_test: 2
-all_metrics: False
-progress_bar: False
-seed:

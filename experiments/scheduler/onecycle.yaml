@@ -1,0 +1,10 @@
+scheduler_name: "OneCycleLR"
+nr_cycle: 8
+pct_start: 0.3
+anneal_strategy: 'cos'
+cycle_momentum: True
+base_momentum: 0.85
+max_momentum: 0.95
+div_factor: 10.0
+final_div_factor: 500.0
+last_epoch: -1
