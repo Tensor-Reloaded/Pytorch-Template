@@ -293,6 +293,8 @@ class Solver(object):
                     self.save(epoch, 0)
 
                 if self.args.scheduler == "MultiStepLR":
+                    self.scheduler.step()
+                elif self.args.scheduler == "ReduceLROnPlateau":
                     self.scheduler.step(train_result[0])
                 elif self.args.scheduler == "OneCycleLR":
                     pass
