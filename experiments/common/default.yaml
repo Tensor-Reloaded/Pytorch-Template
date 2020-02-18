@@ -4,4 +4,4 @@ all_metrics: False
 cuda: True
 cuda_device: 0
 seed:
-progress_bar: True
+progress_bar: False
