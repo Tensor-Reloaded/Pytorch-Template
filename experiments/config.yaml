@@ -15,4 +15,3 @@ dataset: ${dataset_name}
 scheduler: ${scheduler_name}
 
 load_model: ""
-es_patience: 100000

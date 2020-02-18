@@ -4,3 +4,4 @@ momentum: 0.9
 nesterov: True
 epoch: 200
 type: "sgd"
+es_patience: 100000
