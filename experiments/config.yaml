@@ -1,6 +1,6 @@
 defaults:
   - common: default
-  - model: PreResNet
+  - model: PreResNet56
   - dataset: cifar10
   - optimizer: baseline
   - initializer: default
@@ -13,5 +13,6 @@ defaults:
 model: ${model_name}(${model_depth})
 dataset: ${dataset_name}
 scheduler: ${scheduler_name}
+save_dir: "${model}/${aux_save_dir}/${seed}"
 
 load_model: ""

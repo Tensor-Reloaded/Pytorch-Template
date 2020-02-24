@@ -4,6 +4,7 @@ import pprint
 import argparse
 import pickle
 import os
+import re
 from shutil import copyfile
 
 import numpy as np
@@ -38,7 +39,7 @@ except ImportError:
 
 storage_dir = "../storage/"
 
-@hydra.main('experiments/config.yaml', strict=True)
+@hydra.main(config_path='experiments/config.yaml', strict=True)
 def main(config: DictConfig):
     global storage_dir
     storage_dir = os.path.dirname(utils.get_original_cwd()) + "/storage/"
@@ -71,11 +72,8 @@ class Solver(object):
         else:
             self.writer = SummaryWriter(log_dir="runs/" + self.args.save_dir)
 
-        self.batch_plot_idx = 0
-
         self.train_batch_plot_idx = 0
         self.test_batch_plot_idx = 0
-        self.val_batch_plot_idx = 0
         if self.args.dataset == "CIFAR-10":
             self.nr_classes = len(CIFAR_10_CLASSES)
         elif self.args.dataset == "CIFAR-100":
@@ -158,7 +156,8 @@ class Solver(object):
             self.model.load_state_dict(torch.load(self.args.load_model))
         self.model = self.model.to(self.device)
 
-        self.optimizer = optim.SGD(self.model.parameters(), lr=self.args.lr, momentum=self.args.momentum, weight_decay=self.args.wd, nesterov=self.args.nesterov)
+        if self.args.optimizer_name == "sgd":
+            self.optimizer = optim.SGD(self.model.parameters(), lr=self.args.lr, momentum=self.args.momentum, weight_decay=self.args.wd, nesterov=self.args.nesterov)
         if self.args.scheduler == "ReduceLROnPlateau":
             self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
                 self.optimizer, mode='min', factor=self.args.lr_gamma, patience=self.args.reduce_lr_patience,
@@ -182,9 +181,13 @@ class Solver(object):
                 self.model, self.optimizer = amp.initialize(self.model, self.optimizer, opt_level=f"O{self.args.mixpo}",
                                                             patch_torch_functions=True, keep_batchnorm_fp32=True)
 
-    def get_batch_plot_idx(self):
-        self.batch_plot_idx += 1
-        return self.batch_plot_idx - 1
+    def get_train_batch_plot_idx(self):
+        self.train_batch_plot_idx += 1
+        return self.train_batch_plot_idx - 1
+
+    def get_test_batch_plot_idx(self):
+        self.test_batch_plot_idx += 1
+        return self.test_batch_plot_idx - 1
 
     def train(self):
         print("train:")
@@ -206,7 +209,7 @@ class Solver(object):
                 loss.backward()
             self.optimizer.step()
             total_loss += loss.item()
-            self.writer.add_scalar("Train/Batch_Loss", loss.item(), self.get_batch_plot_idx())
+            self.writer.add_scalar("Train/Batch_Loss", loss.item(), self.get_train_batch_plot_idx())
 
             prediction = torch.max(output, 1)
             total += target.size(0)
@@ -232,7 +235,7 @@ class Solver(object):
                 data, target = data.to(self.device), target.to(self.device)
                 output = self.model(data)
                 loss = self.criterion(output, target)
-                self.writer.add_scalar("Test/Batch_Loss", loss.item(), self.get_batch_plot_idx())
+                self.writer.add_scalar("Test/Batch_Loss", loss.item(), self.get_test_batch_plot_idx())
                 total_loss += loss.item()
                 prediction = torch.max(output, 1)
                 total += target.size(0)
