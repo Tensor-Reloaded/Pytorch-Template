@@ -2,7 +2,7 @@ defaults:
   - common: default
   - model: PreResNet56
   - dataset: cifar10
-  - optimizer: baseline
+  - optimizer: sgd
   - initializer: default
   - save: default
   - scheduler: milestones
