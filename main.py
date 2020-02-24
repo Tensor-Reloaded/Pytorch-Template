@@ -173,6 +173,7 @@ class Solver(object):
             self.scheduler = optim.lr_scheduler.OneCycleLR(self.optimizer,max_lr=self.args.lr, total_steps=None, epochs=self.args.epoch//(self.args.nr_cycle-1), steps_per_epoch=len(self.train_loader), pct_start=0.3, anneal_strategy='cos', cycle_momentum=True, base_momentum=0.85, max_momentum=0.95, div_factor=10.0, final_div_factor=500.0, last_epoch=-1)
         else:
             print("This scheduler is not implemented, go ahead an commit one")
+            exit()
 
         self.criterion = nn.CrossEntropyLoss().to(self.device)
 
