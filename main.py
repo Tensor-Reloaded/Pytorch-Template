@@ -130,14 +130,14 @@ class Solver(object):
                     sampler=SubsetRandomSampler(subset_indices))
 
         if self.args.dataset == "CIFAR-10":
-            test_set = torchvision.datasets.CIFAR10(
+            self.test_set = torchvision.datasets.CIFAR10(
                 root=storage_dir, train=False, download=True, transform=test_transform)
         elif self.args.dataset == "CIFAR-100":
-            test_set = torchvision.datasets.CIFAR100(
+            self.test_set = torchvision.datasets.CIFAR100(
                 root=storage_dir, train=False, download=True, transform=test_transform)
 
         self.test_loader = torch.utils.data.DataLoader(
-            dataset=test_set, batch_size=self.args.test_batch_size, shuffle=False)
+            dataset=self.test_set, batch_size=self.args.test_batch_size, shuffle=False)
 
     def load_model(self):
         if self.cuda:
