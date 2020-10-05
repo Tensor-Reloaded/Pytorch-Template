@@ -156,8 +156,11 @@ class Solver(object):
             self.model.load_state_dict(torch.load(self.args.load_model))
         self.model = self.model.to(self.device)
 
+    def init_optimizer(self):
         if self.args.optimizer_name == "sgd":
             self.optimizer = optim.SGD(self.model.parameters(), lr=self.args.lr, momentum=self.args.momentum, weight_decay=self.args.wd, nesterov=self.args.nesterov)
+
+    def init_scheduler(self):
         if self.args.scheduler == "ReduceLROnPlateau":
             self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
                 self.optimizer, mode='min', factor=self.args.lr_gamma, patience=self.args.reduce_lr_patience,
@@ -174,13 +177,10 @@ class Solver(object):
         else:
             print("This scheduler is not implemented, go ahead an commit one")
             exit()
-
+    
+    def init_criterion(self):
         self.criterion = nn.CrossEntropyLoss().to(self.device)
 
-        if self.cuda:
-            if self.args.half:
-                self.model, self.optimizer = amp.initialize(self.model, self.optimizer, opt_level=f"O{self.args.mixpo}",
-                                                            patch_torch_functions=True, keep_batchnorm_fp32=True)
 
     def get_train_batch_plot_idx(self):
         self.train_batch_plot_idx += 1
@@ -265,29 +265,26 @@ class Solver(object):
             reset_seed(self.args.seed)
         self.load_data()
         self.load_model()
+        self.init_optimizer()
+        self.init_scheduler()
+        self.init_criterion()
 
+        if self.cuda:
+            if self.args.half:
+                self.model, self.optimizer = amp.initialize(self.model, self.optimizer, opt_level=f"O{self.args.mixpo}",
+                                                            patch_torch_functions=True, keep_batchnorm_fp32=True)
         best_accuracy = 0
         try:
             for epoch in range(1, self.args.epoch + 1):
                 print("\n===> epoch: %d/%d" % (epoch, self.args.epoch))
+                self.epoch = epoch
 
                 train_result = self.train()
-
-                loss = train_result[0]
-                accuracy = train_result[1]
-                self.writer.add_scalar("Train/Loss", loss, epoch)
-                self.writer.add_scalar("Train/Accuracy", accuracy, epoch)
+                print_metrics(self,train_result)
 
                 test_result = self.test()
-
-                loss = test_result[0]
-                accuracy = test_result[1]
-                self.writer.add_scalar("Test/Loss", loss, epoch)
-                self.writer.add_scalar("Test/Accuracy", accuracy, epoch)
-
-                self.writer.add_scalar("Model/Norm", self.get_model_norm(), epoch)
-                self.writer.add_scalar("Train_Params/Learning_rate", self.scheduler.get_last_lr()[0], epoch)
-
+                print_metrics(self,test_result)
+                
                 if best_accuracy < test_result[1]:
                     best_accuracy = test_result[1]
                     self.save(epoch, best_accuracy)
