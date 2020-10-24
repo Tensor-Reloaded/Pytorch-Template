@@ -1,9 +1,15 @@
-# @package _global_
+# @package optimizer
 
-optimizer_name: "sgd"
-lr: 0.05
-wd: 0.0001
-momentum: 0.9
-nesterov: True
+name: "SGD"
+parameters:
+  - lr: 0.05
+  - weight_decay: 0.0001
+  - momentum: 0.9
+  - nesterov: True
+
+use_lookahead: True
+lookahead_k: 5
+lookahead_alpha: 0.5
+
 epoch: 200
 es_patience: 100000

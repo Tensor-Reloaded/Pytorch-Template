@@ -10,6 +10,7 @@ from shutil import copyfile
 import numpy as np
 import torch.backends.cudnn as cudnn
 import torch.optim as optim
+import torch_optimizer
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.data
@@ -66,7 +67,7 @@ class Solver(object):
         self.cuda = config.cuda
         self.train_loader = None
         self.test_loader = None
-        self.es = EarlyStopping(patience=self.args.es_patience)
+        self.es = EarlyStopping(patience=self.args.optimizer.es_patience)
         if not self.args.save_dir:
             self.writer = SummaryWriter()
         else:
@@ -146,7 +147,7 @@ class Solver(object):
         else:
             self.device = torch.device('cpu')
 
-        self.model = eval(self.args.model)
+        self.model = eval(self.args.model_command)
         self.save_dir = storage_dir + self.args.save_dir
         if not os.path.isdir(self.save_dir):
             os.makedirs(self.save_dir)
@@ -157,8 +158,18 @@ class Solver(object):
         self.model = self.model.to(self.device)
 
     def init_optimizer(self):
-        if self.args.optimizer_name == "sgd":
-            self.optimizer = optim.SGD(self.model.parameters(), lr=self.args.lr, momentum=self.args.momentum, weight_decay=self.args.wd, nesterov=self.args.nesterov)
+
+        parameters = OmegaConf.to_container(self.args.optimizer.parameters, resolve=True)
+        parameters = {next(iter(param)):param[next(iter(param))] for param in parameters}
+        parameters["params"] = self.model.parameters()
+        try:
+            self.optimizer = getattr(torch_optimizer, self.args.optimizer.name)(**parameters)
+        except Exception as e:
+            print(e)
+            self.optimizer = getattr(optim, self.args.optimizer.name)(**parameters)
+
+        if self.args.optimizer.use_lookahead:
+            self.optimizer = torch_optimizer.Lookahead(self.optimizer, k=self.args.optimizer.lookahead_k, alpha=self.args.optimizer.lookahead_alpha)
 
     def init_scheduler(self):
         if self.args.scheduler == "ReduceLROnPlateau":
@@ -180,7 +191,6 @@ class Solver(object):
     
     def init_criterion(self):
         self.criterion = nn.CrossEntropyLoss().to(self.device)
-
 
     def get_train_batch_plot_idx(self):
         self.train_batch_plot_idx += 1
@@ -275,8 +285,8 @@ class Solver(object):
                                                             patch_torch_functions=True, keep_batchnorm_fp32=True)
         best_accuracy = 0
         try:
-            for epoch in range(1, self.args.epoch + 1):
-                print("\n===> epoch: %d/%d" % (epoch, self.args.epoch))
+            for epoch in range(1, self.args.optimizer.epoch + 1):
+                print("\n===> epoch: %d/%d" % (epoch, self.args.optimizer.epoch))
                 self.epoch = epoch
 
                 train_result = self.train()

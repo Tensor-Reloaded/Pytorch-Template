@@ -1,4 +1,4 @@
-# @package _global_
+# @package model
 
-model_name: PreResNet
-model_depth: 18
+name: PreResNet
+depth: 18
