@@ -1,3 +1,5 @@
+# @package _global_
+
 half: False
 mixpo: 1
 all_metrics: False

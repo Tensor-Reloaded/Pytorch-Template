@@ -19,7 +19,7 @@ from tensorboardX import SummaryWriter
 from torchvision import transforms as transforms
 import hydra
 from hydra import utils
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 from learn_utils import *
 from misc import progress_bar
@@ -27,9 +27,9 @@ from models import *
 
 APEX_MISSING = False
 try:
+    from apex import amp, optimizers
     from apex.parallel import DistributedDataParallel as DDP
     from apex.fp16_utils import *
-    from apex import amp, optimizers
     from apex.multi_tensor_apply import multi_tensor_applier
 except ImportError:
     print("Apex not found on the system, it won't be using half-precision")
@@ -39,14 +39,14 @@ except ImportError:
 
 storage_dir = "../storage/"
 
-@hydra.main(config_path='experiments/config.yaml', strict=True)
+@hydra.main(config_path='experiments', config_name='config')
 def main(config: DictConfig):
     global storage_dir
     storage_dir = os.path.dirname(utils.get_original_cwd()) + "/storage/"
     save_config_path = "runs/" + config.save_dir
     os.makedirs(save_config_path, exist_ok=True)
     with open(os.path.join(save_config_path, "README.md"), 'w+') as f:
-        f.write(config.pretty())
+        f.write(OmegaConf.to_yaml(config))
 
     if APEX_MISSING:
         config.half = False
@@ -104,7 +104,7 @@ class Solver(object):
                 dataset=self.train_set, batch_size=self.args.train_batch_size, shuffle=True)
         else:
             filename = "subset_indices/subset_balanced_{}_{}.data".format(
-                self.dataset, self.args.train_subset)
+                self.args.dataset, self.args.train_subset)
             if os.path.isfile(filename):
                 with open(filename, 'rb') as f:
                     subset_indices = pickle.load(f)

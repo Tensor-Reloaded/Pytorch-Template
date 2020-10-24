@@ -1,2 +1,4 @@
+# @package _global_
+
 scheduler_name: "CosineAnnealingLR"
 nr_cycle: 8
