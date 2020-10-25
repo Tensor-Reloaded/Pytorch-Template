@@ -165,7 +165,6 @@ class Solver(object):
         try:
             self.optimizer = getattr(torch_optimizer, self.args.optimizer.name)(**parameters)
         except Exception as e:
-            print(e)
             self.optimizer = getattr(optim, self.args.optimizer.name)(**parameters)
 
         if self.args.optimizer.use_lookahead:
