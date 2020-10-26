@@ -7,3 +7,7 @@ cuda: True
 cuda_device: 0
 seed:
 progress_bar: False
+
+save_model: False
+save_interval: 5
+aux_save_dir: "checkpoints"

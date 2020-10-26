@@ -22,7 +22,7 @@ import hydra
 from hydra import utils
 from omegaconf import DictConfig, OmegaConf
 
-from learn_utils import *
+from utils import *
 from misc import progress_bar
 from models import *
 
@@ -43,11 +43,18 @@ storage_dir = "../storage/"
 @hydra.main(config_path='experiments', config_name='config')
 def main(config: DictConfig):
     global storage_dir
+
+    head, tail = os.path.split(config.save_dir)
+    if tail == 'None':
+        config.save_dir = head
+    else:
+        config.save_dir = os.path.join(head, tail)
+
     storage_dir = os.path.dirname(utils.get_original_cwd()) + "/storage/"
     save_config_path = "runs/" + config.save_dir
     os.makedirs(save_config_path, exist_ok=True)
     with open(os.path.join(save_config_path, "README.md"), 'w+') as f:
-        f.write(OmegaConf.to_yaml(config))
+        f.write(OmegaConf.to_yaml(config, resolve=True))
 
     if APEX_MISSING:
         config.half = False
@@ -68,6 +75,7 @@ class Solver(object):
         self.train_loader = None
         self.test_loader = None
         self.es = EarlyStopping(patience=self.args.optimizer.es_patience)
+        
         if not self.args.save_dir:
             self.writer = SummaryWriter()
         else:
@@ -75,9 +83,9 @@ class Solver(object):
 
         self.train_batch_plot_idx = 0
         self.test_batch_plot_idx = 0
-        if self.args.dataset == "CIFAR-10":
+        if self.args.dataset.name == "CIFAR-10":
             self.nr_classes = len(CIFAR_10_CLASSES)
-        elif self.args.dataset == "CIFAR-100":
+        elif self.args.dataset.name == "CIFAR-100":
             self.nr_classes = len(CIFAR_100_CLASSES)
 
     def load_data(self):
@@ -93,16 +101,15 @@ class Solver(object):
             train_transform = transforms.Compose([transforms.ToTensor()])
             test_transform = transforms.Compose([transforms.ToTensor()])
 
-        if self.args.dataset == "CIFAR-10":
+        if self.args.dataset.name == "CIFAR-10":
             self.train_set = torchvision.datasets.CIFAR10(
                 root=storage_dir, train=True, download=True, transform=train_transform)
-        elif self.args.dataset == "CIFAR-100":
+        elif self.args.dataset.name == "CIFAR-100":
             self.train_set = torchvision.datasets.CIFAR100(
                 root=storage_dir, train=True, download=True, transform=train_transform)
 
-        if self.args.train_subset is None:
-            self.train_loader = torch.utils.data.DataLoader(
-                dataset=self.train_set, batch_size=self.args.train_batch_size, shuffle=True)
+        if self.args.dataset.train_subset is None:
+            self.train_loader = torch.utils.data.DataLoader(dataset=self.train_set, batch_size=self.args.dataset.train_batch_size, shuffle=self.args.dataset.shuffle, num_workers=self.args.dataset.num_workers_train)
         else:
             filename = "subset_indices/subset_balanced_{}_{}.data".format(
                 self.args.dataset, self.args.train_subset)
@@ -124,21 +131,22 @@ class Solver(object):
             subset_indices = torch.LongTensor(subset_indices)
             self.train_loader = torch.utils.data.DataLoader(
                 dataset=self.train_set, batch_size=self.args.train_batch_size,
-                sampler=SubsetRandomSampler(subset_indices))
+                sampler=SubsetRandomSampler(subset_indices),
+                num_workers=self.args.dataset.num_workers_train)
             if self.args.validate:
                 self.validate_loader = torch.utils.data.DataLoader(
                     dataset=self.train_set, batch_size=self.args.train_batch_size,
-                    sampler=SubsetRandomSampler(subset_indices))
+                    sampler=SubsetRandomSampler(subset_indices),
+                    num_workers=self.args.dataset.num_workers_test)
 
-        if self.args.dataset == "CIFAR-10":
+        if self.args.dataset.name == "CIFAR-10":
             self.test_set = torchvision.datasets.CIFAR10(
                 root=storage_dir, train=False, download=True, transform=test_transform)
-        elif self.args.dataset == "CIFAR-100":
+        elif self.args.dataset.name == "CIFAR-100":
             self.test_set = torchvision.datasets.CIFAR100(
                 root=storage_dir, train=False, download=True, transform=test_transform)
 
-        self.test_loader = torch.utils.data.DataLoader(
-            dataset=self.test_set, batch_size=self.args.test_batch_size, shuffle=False)
+        self.test_loader = torch.utils.data.DataLoader(dataset=self.test_set, batch_size=self.args.dataset.test_batch_size, shuffle=False, num_workers=self.args.dataset.num_workers_test)
 
     def load_model(self):
         if self.cuda:
@@ -158,38 +166,39 @@ class Solver(object):
         self.model = self.model.to(self.device)
 
     def init_optimizer(self):
-
         parameters = OmegaConf.to_container(self.args.optimizer.parameters, resolve=True)
-        parameters = {next(iter(param)):param[next(iter(param))] for param in parameters}
+        parameters = {next(iter(param)):param[next(iter(param))] for param in parameters if param[next(iter(param))] is not None}
         parameters["params"] = self.model.parameters()
         try:
             self.optimizer = getattr(torch_optimizer, self.args.optimizer.name)(**parameters)
         except Exception as e:
-            self.optimizer = getattr(optim, self.args.optimizer.name)(**parameters)
-
+            try:
+                self.optimizer = getattr(optim, self.args.optimizer.name)(**parameters)
+            except:
+                print(f"This optimizer is not implemented ({self.args.optimizer.name}), go ahead and commit it")
+                exit()
         if self.args.optimizer.use_lookahead:
             self.optimizer = torch_optimizer.Lookahead(self.optimizer, k=self.args.optimizer.lookahead_k, alpha=self.args.optimizer.lookahead_alpha)
 
     def init_scheduler(self):
-        if self.args.scheduler == "ReduceLROnPlateau":
-            self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
-                self.optimizer, mode='min', factor=self.args.lr_gamma, patience=self.args.reduce_lr_patience,
-                min_lr=self.args.reduce_lr_min_lr, verbose=True, threshold=self.args.reduce_lr_delta)
-        elif self.args.scheduler == "CosineAnnealingLR":
-            if self.args.sum_augmentation:
-                self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer,T_max=self.args.epoch//(self.args.nr_cycle-1),eta_min=self.args.reduce_lr_min_lr)
-            else:
-                self.scheduler = optim.lr_scheduler.CosineAnnealingLR(self.optimizer,T_max=self.args.epoch,eta_min=self.args.reduce_lr_min_lr)
-        elif self.args.scheduler == "MultiStepLR":
-            self.scheduler = optim.lr_scheduler.MultiStepLR(self.optimizer, milestones=self.args.lr_milestones, gamma=self.args.lr_gamma)
-        elif self.args.scheduler == "OneCycleLR":
-            self.scheduler = optim.lr_scheduler.OneCycleLR(self.optimizer,max_lr=self.args.lr, total_steps=None, epochs=self.args.epoch//(self.args.nr_cycle-1), steps_per_epoch=len(self.train_loader), pct_start=0.3, anneal_strategy='cos', cycle_momentum=True, base_momentum=0.85, max_momentum=0.95, div_factor=10.0, final_div_factor=500.0, last_epoch=-1)
-        else:
-            print("This scheduler is not implemented, go ahead an commit one")
+        if self.args.scheduler.name not in schedulers:
+            print(f"This loss is not implemented ({self.args.scheduler.name}), go ahead and commit it")
             exit()
-    
+            
+        parameters = OmegaConf.to_container(self.args.scheduler.parameters, resolve=True)
+        parameters = {next(iter(param)):param[next(iter(param))] for param in parameters if param[next(iter(param))] is not None}
+        parameters["optimizer"] = self.optimizer
+        self.scheduler = schedulers[self.args.scheduler.name](**parameters)
+
     def init_criterion(self):
-        self.criterion = nn.CrossEntropyLoss().to(self.device)
+        if self.args.loss.name not in losses:
+            print(f"This loss is not implemented ({self.args.loss.name}), go ahead and commit it")
+            exit()
+
+        parameters = OmegaConf.to_container(self.args.loss.parameters, resolve=True)
+        parameters = {next(iter(param)):param[next(iter(param))] for param in parameters if param[next(iter(param))] is not None}
+        self.criterion = losses[self.args.loss.name](**parameters)
+        
 
     def get_train_batch_plot_idx(self):
         self.train_batch_plot_idx += 1
@@ -229,7 +238,7 @@ class Solver(object):
             if self.args.progress_bar:
                 progress_bar(batch_num, len(self.train_loader), 'Loss: %.4f | Acc: %.3f%% (%d/%d)'
                              % (total_loss / (batch_num + 1), 100.0 * correct/total, correct, total))
-            if self.args.scheduler == "OneCycleLR":
+            if self.args.scheduler.name == "OneCycleLR":
                 self.scheduler.step()
         return total_loss, correct / total
 
@@ -302,11 +311,11 @@ class Solver(object):
                 if self.args.save_model and epoch % self.args.save_interval == 0:
                     self.save(epoch, 0)
 
-                if self.args.scheduler == "MultiStepLR":
+                if self.args.scheduler.name == "MultiStepLR":
                     self.scheduler.step()
-                elif self.args.scheduler == "ReduceLROnPlateau":
+                elif self.args.scheduler.name == "ReduceLROnPlateau":
                     self.scheduler.step(train_result[0])
-                elif self.args.scheduler == "OneCycleLR":
+                elif self.args.scheduler.name == "OneCycleLR":
                     pass
                 else:
                     self.scheduler.step()

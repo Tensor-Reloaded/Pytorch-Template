@@ -1,8 +1,10 @@
-# @package _global_
+# @package dataset
 
-dataset_name: "CIFAR-10"
+name: "CIFAR-10"
+shuffle: True
+
 train_batch_size: 128
 test_batch_size: 512
-num_workers_train: 4
-num_workers_test: 4
+num_workers_train: 0
+num_workers_test: 0
 train_subset:

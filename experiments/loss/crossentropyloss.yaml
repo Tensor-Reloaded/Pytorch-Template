@@ -1,0 +1,6 @@
+# @package loss
+
+name: "crossentropyloss"
+parameters:
+  - weights: 
+  - reduce : 

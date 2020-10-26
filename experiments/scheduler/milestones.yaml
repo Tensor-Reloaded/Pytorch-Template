@@ -1,5 +1,6 @@
-# @package _global_
+# @package scheduler
 
-scheduler_name: "MultiStepLR"
-lr_milestones: [30, 60, 90, 120,150]
-lr_gamma: 0.5
+name: "MultiStepLR"
+parameters:
+  - milestones: [30, 60, 90, 120,150]
+  - gamma: 0.5

@@ -1,5 +1,0 @@
-# @package _global_
-
-save_model: False
-save_interval: 5
-aux_save_dir: "checkpoints"

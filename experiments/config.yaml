@@ -1,18 +1,16 @@
 defaults:
   - common: default
-  - model: PreResNet56
   - dataset: cifar10
-  - optimizer: sgd
   - initializer: default
-  - save: default
+  - loss: crossentropyloss
+  - model: PreResNet56
+  - optimizer: sgd
   - scheduler: milestones
   - specific: baseline
-  - dataset_model_specific: ${defaults.2.dataset}/${defaults.7.specific}/${defaults.1.model}
+  - dataset_model_specific: ${defaults.1.dataset}/${defaults.7.specific}/${defaults.4.model}
     optional: true
 
 model_command: ${model.name}(${model.depth})
-dataset: ${dataset_name}
-scheduler: ${scheduler_name}
 save_dir: "${model_command}/${aux_save_dir}/${seed}"
 
 load_model: ""
