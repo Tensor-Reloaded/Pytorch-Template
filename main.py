@@ -16,7 +16,7 @@ import torch.nn.functional as F
 import torch.utils.data
 from torch.utils.data.sampler import SubsetRandomSampler
 import torchvision
-from tensorboardX import SummaryWriter
+from torch.utils.tensorboard import SummaryWriter
 from torchvision import transforms as transforms
 import hydra
 from hydra import utils
@@ -227,8 +227,11 @@ class Solver(object):
             else:
                 loss.backward()
             self.optimizer.step()
-            total_loss += loss.item()
-            self.writer.add_scalar("Train/Batch_Loss", loss.item(), self.get_train_batch_plot_idx())
+            batch_loss = loss.item()
+            total_loss += batch_loss
+            print_batch_metrics(True, self.writer,{
+                'loss':batch_loss
+            }, self.get_train_batch_plot_idx())
 
             prediction = torch.max(output, 1)
             total += target.size(0)
@@ -254,8 +257,13 @@ class Solver(object):
                 data, target = data.to(self.device), target.to(self.device)
                 output = self.model(data)
                 loss = self.criterion(output, target)
-                self.writer.add_scalar("Test/Batch_Loss", loss.item(), self.get_test_batch_plot_idx())
-                total_loss += loss.item()
+
+                batch_loss = loss.item()
+                total_loss += batch_loss
+                print_batch_metrics(False, self.writer,{
+                    'loss':batch_loss
+                }, self.get_test_batch_plot_idx())
+
                 prediction = torch.max(output, 1)
                 total += target.size(0)
 
@@ -298,10 +306,18 @@ class Solver(object):
                 self.epoch = epoch
 
                 train_result = self.train()
-                print_metrics(self,train_result)
+                print_epoch_metrics(True, self.writer,{
+                    'loss':train_result[0],
+                    'accuracy':train_result[1]
+                }, self.epoch)
 
                 test_result = self.test()
-                print_metrics(self,test_result)
+                print_epoch_metrics(False, self.writer,{
+                    'loss':test_result[0],
+                    'accuracy':test_result[1],
+                    'lr': self.scheduler.get_last_lr()[0],
+                    'norm': self.get_model_norm()
+                }, self.epoch)
                 
                 if best_accuracy < test_result[1]:
                     best_accuracy = test_result[1]

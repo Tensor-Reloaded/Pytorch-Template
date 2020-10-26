@@ -115,18 +115,25 @@ def compute_weights_l1_norm(model):
         norm_sum += torch.sum(torch.abs(param))
     return norm_sum
 
-def print_metrics(process, result):
-    loss = result[0]
-    accuracy = result[1]
-
-    if process.model.training:
+def print_epoch_metrics(training, writer, result, idx):
+    if training:
         state = "Train"
     else:
         state="Test"
-        process.writer.add_scalar("Model/Norm", process.get_model_norm(), process.epoch)
-        process.writer.add_scalar("Train_Params/Learning_rate", process.scheduler.get_last_lr()[0], process.epoch)
+        writer.add_scalar("Model/Norm", result["norm"], idx)
+        writer.add_scalar("Train_Params/Learning_rate", result["lr"], idx)
 
-    process.writer.add_scalar(f"{state}/Loss", loss, process.epoch)
-    process.writer.add_scalar(f"{state}/Accuracy", accuracy, process.epoch)
+    writer.add_scalar(f"{state}/Loss", result["loss"], idx)
+    writer.add_scalar(f"{state}/Accuracy", result["accuracy"], idx)
+
+
+def print_batch_metrics(training, writer, result, idx):
+    if training:
+        state = "Train"
+    else:
+        state="Test"
+        
+    writer.add_scalar(f"{state}/Batch_Loss", result["loss"], idx)
+
 
 
