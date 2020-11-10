@@ -2,5 +2,5 @@
 
 name: "crossentropyloss"
 parameters:
-  - weights: 
-  - reduce : 
+  weights: 
+  reduce : 

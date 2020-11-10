@@ -1,13 +1,17 @@
 defaults:
+  - hydra/launcher: basic
+  - hydra/sweeper: basic   # nevergrad | basic
   - common: default
   - dataset: cifar10
+  - hyperparameters:  # leave empty for basic sweeper
+    optional: true
   - initializer: default
   - loss: crossentropyloss
   - model: PreResNet56
   - optimizer: sgd
   - scheduler: milestones
   - specific: baseline
-  - dataset_model_specific: ${defaults.1.dataset}/${defaults.7.specific}/${defaults.4.model}
+  - dataset_model_specific: ${defaults.1.dataset}/${defaults.8.specific}/${defaults.5.model}
     optional: true
 
 model_command: ${model.name}(${model.depth})

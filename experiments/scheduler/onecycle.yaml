@@ -2,16 +2,16 @@
 
 name: "OneCycleLR"
 parameters:
-  - max_lr: ${optimizer.parameters.lr}
-  - total_steps: 
-  - nr_cycle: 8
-  - epochs: ${optimizer.epoch//(nr_cycle-1)}
-  - steps_per_epoch: 300
-  - pct_start: 0.3
-  - anneal_strategy: 'cos'
-  - cycle_momentum: True
-  - base_momentum: 0.85
-  - max_momentum: 0.95
-  - div_factor: 10.0
-  - final_div_factor: 500.0
-  - last_epoch: -1
+  max_lr: ${optimizer.parameters.lr}
+  total_steps: 
+  nr_cycle: 8
+  epochs: ${optimizer.epoch//(nr_cycle-1)}
+  steps_per_epoch: 300
+  pct_start: 0.3
+  anneal_strategy: 'cos'
+  cycle_momentum: True
+  base_momentum: 0.85
+  max_momentum: 0.95
+  div_factor: 10.0
+  final_div_factor: 500.0
+  last_epoch: -1

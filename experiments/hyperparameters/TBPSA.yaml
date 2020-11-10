@@ -1,0 +1,32 @@
+# @package hydra.sweeper
+
+
+optim:
+  # name of the nevergrad optimizer to use
+  # OnePlusOne is good at low budget, but may converge early
+  optimizer: TBPSA
+  # total number of function evaluations to perform
+  budget: 100
+  # number of parallel workers for performing function evaluations
+  num_workers: 4
+  # maximize: true  # comment out for maximization
+# default parametrization of the search space
+parametrization:
+  optimizer:
+    - sgd
+  optimizer.epochs: 100
+  optimizer.parameters.lr:
+    init: 0.05
+    step: 2.0
+    log: true
+  optimizer.parameters.weight_decay:
+    init: 0.0001
+    step: 5.0
+    log: true
+  
+  dataset.train_batch_size:
+    - 32
+    - 64
+    - 128
+    - 256
+  

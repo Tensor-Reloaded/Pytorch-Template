@@ -60,7 +60,7 @@ def main(config: DictConfig):
         config.half = False
 
     solver = Solver(config)
-    solver.run()
+    return solver.run()
 
 
 class Solver(object):
@@ -167,7 +167,7 @@ class Solver(object):
 
     def init_optimizer(self):
         parameters = OmegaConf.to_container(self.args.optimizer.parameters, resolve=True)
-        parameters = {next(iter(param)):param[next(iter(param))] for param in parameters if param[next(iter(param))] is not None}
+        parameters = {k: v for k, v in parameters.items() if v is not None}
         parameters["params"] = self.model.parameters()
         try:
             self.optimizer = getattr(torch_optimizer, self.args.optimizer.name)(**parameters)
@@ -186,7 +186,7 @@ class Solver(object):
             exit()
             
         parameters = OmegaConf.to_container(self.args.scheduler.parameters, resolve=True)
-        parameters = {next(iter(param)):param[next(iter(param))] for param in parameters if param[next(iter(param))] is not None}
+        parameters = {k: v for k, v in parameters.items() if v is not None}
         parameters["optimizer"] = self.optimizer
         self.scheduler = schedulers[self.args.scheduler.name](**parameters)
 
@@ -196,7 +196,7 @@ class Solver(object):
             exit()
 
         parameters = OmegaConf.to_container(self.args.loss.parameters, resolve=True)
-        parameters = {next(iter(param)):param[next(iter(param))] for param in parameters if param[next(iter(param))] is not None}
+        parameters = {k: v for k, v in parameters.items() if v is not None}
         self.criterion = losses[self.args.loss.name](**parameters)
         
 
@@ -300,9 +300,10 @@ class Solver(object):
                 self.model, self.optimizer = amp.initialize(self.model, self.optimizer, opt_level=f"O{self.args.mixpo}",
                                                             patch_torch_functions=True, keep_batchnorm_fp32=True)
         best_accuracy = 0
+        best_loss = np.inf
         try:
-            for epoch in range(1, self.args.optimizer.epoch + 1):
-                print("\n===> epoch: %d/%d" % (epoch, self.args.optimizer.epoch))
+            for epoch in range(1, self.args.optimizer.epochs + 1):
+                print("\n===> epoch: %d/%d" % (epoch, self.args.optimizer.epochs))
                 self.epoch = epoch
 
                 train_result = self.train()
@@ -319,6 +320,9 @@ class Solver(object):
                     'norm': self.get_model_norm()
                 }, self.epoch)
                 
+                if best_loss > test_result[0]:
+                    best_loss = test_result[0]
+
                 if best_accuracy < test_result[1]:
                     best_accuracy = test_result[1]
                     self.save(epoch, best_accuracy)
@@ -352,6 +356,13 @@ class Solver(object):
         with open("runs/" + self.args.save_dir + "/README.md", 'a+') as f:
             f.write("\n## Accuracy\n %.3f%%" % (best_accuracy * 100))
         print("Saved best accuracy checkpoint")
+
+        if self.args.optimized_metric == "accuracy":
+            return 1-best_accuracy
+
+        if self.args.optimized_metric == "loss":
+            return best_loss
+
 
     def get_model_norm(self, norm_type=2):
         norm = 0.0

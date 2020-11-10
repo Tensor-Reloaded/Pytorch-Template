@@ -2,5 +2,5 @@
 
 name: "MultiStepLR"
 parameters:
-  - milestones: [30, 60, 90, 120,150]
-  - gamma: 0.5
+  milestones: [30, 60, 90, 120,150]
+  gamma: 0.5

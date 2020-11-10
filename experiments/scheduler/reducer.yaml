@@ -2,8 +2,8 @@
 
 name: "ReduceLROnPlateau"
 parameters:
-  - factor: 0.5
-  - patience: 20
-  - min_lr: 0.0005
-  - verbose: True
-  - threshold: 0.02
+  factor: 0.5
+  patience: 20
+  min_lr: 0.0005
+  verbose: True
+  threshold: 0.02
