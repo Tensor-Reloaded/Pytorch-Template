@@ -1,7 +1,4 @@
 hydra-core>=1.0.0
 numpy==1.19.2
 omegaconf==2.0.3
-tensorboardX==2.1
 torch_optimizer==0.0.1a16
-torch>=1.6.0
-torchvision>=0.7.0

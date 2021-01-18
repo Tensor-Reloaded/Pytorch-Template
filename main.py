@@ -15,6 +15,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.data
 from torch.utils.data.sampler import SubsetRandomSampler
+from torch.cuda.amp import autocast, GradScaler
 import torchvision
 from torch.utils.tensorboard import SummaryWriter
 from torchvision import transforms as transforms
@@ -26,16 +27,7 @@ from utils import *
 from misc import progress_bar
 from models import *
 
-APEX_MISSING = False
-try:
-    from apex import amp, optimizers
-    from apex.parallel import DistributedDataParallel as DDP
-    from apex.fp16_utils import *
-    from apex.multi_tensor_apply import multi_tensor_applier
-except ImportError:
-    print("Apex not found on the system, it won't be using half-precision")
-    APEX_MISSING = True
-    pass
+
 
 
 storage_dir = "../storage/"
@@ -56,8 +48,6 @@ def main(config: DictConfig):
     with open(os.path.join(save_config_path, "README.md"), 'w+') as f:
         f.write(OmegaConf.to_yaml(config, resolve=True))
 
-    if APEX_MISSING:
-        config.half = False
 
     solver = Solver(config)
     return solver.run()
@@ -75,6 +65,7 @@ class Solver(object):
         self.train_loader = None
         self.test_loader = None
         self.es = EarlyStopping(patience=self.args.optimizer.es_patience)
+        self.scaler = GradScaler()
         
         if not self.args.save_dir:
             self.writer = SummaryWriter()
@@ -219,14 +210,18 @@ class Solver(object):
             data, target = data.to(self.device), target.to(self.device)
             self.optimizer.zero_grad()
 
-            output = self.model(data)
-            loss = self.criterion(output, target)
             if self.args.half:
-                with amp.scale_loss(loss, self.optimizer) as scaled_loss:
-                    scaled_loss.backward()
+                with autocast():
+                    output = self.model(data)
+                    loss = self.criterion(output, target)
+                    self.scaler.scale(loss).backward()
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
             else:
+                output = self.model(data)
+                loss = self.criterion(output, target)
                 loss.backward()
-            self.optimizer.step()
+                self.optimizer.step()
             batch_loss = loss.item()
             total_loss += batch_loss
             print_batch_metrics(True, self.writer,{
