@@ -121,12 +121,12 @@ class Solver(object):
                     pickle.dump(subset_indices, f)
             subset_indices = torch.LongTensor(subset_indices)
             self.train_loader = torch.utils.data.DataLoader(
-                dataset=self.train_set, batch_size=self.args.train_batch_size,
+                dataset=self.train_set, batch_size=self.args.dataset.train_batch_size,
                 sampler=SubsetRandomSampler(subset_indices),
                 num_workers=self.args.dataset.num_workers_train)
             if self.args.validate:
                 self.validate_loader = torch.utils.data.DataLoader(
-                    dataset=self.train_set, batch_size=self.args.train_batch_size,
+                    dataset=self.train_set, batch_size=self.args.dataset.train_batch_size,
                     sampler=SubsetRandomSampler(subset_indices),
                     num_workers=self.args.dataset.num_workers_test)
 
@@ -215,13 +215,16 @@ class Solver(object):
                     output = self.model(data)
                     loss = self.criterion(output, target)
                     self.scaler.scale(loss).backward()
-                    self.scaler.step(self.optimizer)
-                    self.scaler.update()
+                    if self.train_batch_plot_idx % self.args.dataset.update_every == 0:
+                        self.scaler.step(self.optimizer)
+                        self.scaler.update()
             else:
                 output = self.model(data)
                 loss = self.criterion(output, target)
                 loss.backward()
-                self.optimizer.step()
+                if self.train_batch_plot_idx % self.args.dataset.update_every == 0:
+                    self.optimizer.step()
+
             batch_loss = loss.item()
             total_loss += batch_loss
             print_batch_metrics(True, self.writer,{

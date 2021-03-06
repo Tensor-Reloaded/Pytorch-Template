@@ -8,3 +8,5 @@ test_batch_size: 512
 num_workers_train: 0
 num_workers_test: 0
 train_subset:
+
+update_every: 1
