@@ -321,7 +321,7 @@ class Solver(object):
                     'Model/Norm': self.get_model_norm()
                 }
 
-                metrics = train_metrics | test_metrics | model_metrics
+                metrics = train_metrics | test_metrics | model_metrics # Mergeing the 3 dictionaries (Python 3.9)
 
                 print_epoch_metrics(self.writer, metrics, self.epoch)
                 
