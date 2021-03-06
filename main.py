@@ -241,7 +241,11 @@ class Solver(object):
                              % (total_loss / (batch_num + 1), 100.0 * correct/total, correct, total))
             if self.args.scheduler.name == "OneCycleLR":
                 self.scheduler.step()
-        return total_loss, correct / total
+
+        return {
+            'Train/Loss':total_loss,
+            'Train/Accuracy':correct / total,
+        }
 
     def test(self):
         print("test:")
@@ -271,7 +275,11 @@ class Solver(object):
                     progress_bar(batch_num, len(self.test_loader), 'Loss: %.4f | Acc: %.3f%% (%d/%d)'
                                  % (total_loss / (batch_num + 1), 100. * correct / total, correct, total))
 
-        return total_loss, correct/total
+        return {
+            'Test/Loss':total_loss,
+            'Test/Accuracy':correct / total,
+        }
+
 
     def save(self, epoch, accuracy, tag=None):
         if tag != None:
@@ -304,25 +312,24 @@ class Solver(object):
                 print("\n===> epoch: %d/%d" % (epoch, self.args.optimizer.epochs))
                 self.epoch = epoch
 
-                train_result = self.train()
-                print_epoch_metrics(True, self.writer,{
-                    'loss':train_result[0],
-                    'accuracy':train_result[1]
-                }, self.epoch)
+                train_metrics = self.train()
 
-                test_result = self.test()
-                print_epoch_metrics(False, self.writer,{
-                    'loss':test_result[0],
-                    'accuracy':test_result[1],
-                    'lr': self.scheduler.get_last_lr()[0],
-                    'norm': self.get_model_norm()
-                }, self.epoch)
+                test_metrics = self.test()
+
+                model_metrics = {
+                    'Train_Params/Learning_rate': self.scheduler.get_last_lr()[0],
+                    'Model/Norm': self.get_model_norm()
+                }
+
+                metrics = train_metrics | test_metrics | model_metrics
+
+                print_epoch_metrics(self.writer, metrics, self.epoch)
                 
-                if best_loss > test_result[0]:
-                    best_loss = test_result[0]
+                if best_loss > metrics['Test/Loss']:
+                    best_loss = metrics['Test/Loss']
 
-                if best_accuracy < test_result[1]:
-                    best_accuracy = test_result[1]
+                if best_accuracy < metrics['Test/Accuracy']:
+                    best_accuracy = metrics['Test/Accuracy']
                     self.save(epoch, best_accuracy)
                     print("===> BEST ACC. PERFORMANCE: %.3f%%" % (best_accuracy * 100))
 
@@ -332,13 +339,13 @@ class Solver(object):
                 if self.args.scheduler.name == "MultiStepLR":
                     self.scheduler.step()
                 elif self.args.scheduler.name == "ReduceLROnPlateau":
-                    self.scheduler.step(train_result[0])
+                    self.scheduler.step(metrics["Train/Accuracy"])
                 elif self.args.scheduler.name == "OneCycleLR":
                     pass
                 else:
                     self.scheduler.step()
 
-                if self.es.step(train_result[0]):
+                if self.es.step(metrics["Train/Accuracy"]):
                     print("Early stopping")
                     raise KeyboardInterrupt
         except KeyboardInterrupt:
