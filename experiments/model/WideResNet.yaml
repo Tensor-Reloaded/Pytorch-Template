@@ -1,0 +1,8 @@
+# @package model
+
+name: WideResNet
+parameters:
+  depth:
+  num_classes:
+  widen_factor: 1
+  drop_rate: 0.0

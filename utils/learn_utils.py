@@ -3,32 +3,20 @@
     - msr_init: net parameter initialization.
     - progress_bar: progress bar mimic xlua.progress.
 '''
+import os
 import random
+import json
+from pathlib import Path
 
+import pandas as pd
 import numpy as np
+from matplotlib import pyplot as plt
+import seaborn as sns
+from scipy import stats
+import hydra
+
 import torch
-import torch.nn as nn
-import torch.nn.init as init
-
-CIFAR_10_CLASSES = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
-CIFAR_100_CLASSES = (
-    'apple', 'aquarium_fish', 'baby', 'bear', 'beaver', 'bed', 'bee', 'beetle',
-    'bicycle', 'bottle', 'bowl', 'boy', 'bridge', 'bus', 'butterfly', 'camel',
-    'can', 'castle', 'caterpillar', 'cattle', 'chair', 'chimpanzee', 'clock',
-    'cloud', 'cockroach', 'couch', 'crab', 'crocodile', 'cup', 'dinosaur',
-    'dolphin', 'elephant', 'flatfish', 'forest', 'fox', 'girl', 'hamster',
-    'house', 'kangaroo', 'keyboard', 'lamp', 'lawn_mower', 'leopard', 'lion',
-    'lizard', 'lobster', 'man', 'maple_tree', 'motorcycle', 'mountain', 'mouse',
-    'mushroom', 'oak_tree', 'orange', 'orchid', 'otter', 'palm_tree', 'pear',
-    'pickup_truck', 'pine_tree', 'plain', 'plate', 'poppy', 'porcupine',
-    'possum', 'rabbit', 'raccoon', 'ray', 'road', 'rocket', 'rose',
-    'sea', 'seal', 'shark', 'shrew', 'skunk', 'skyscraper', 'snail', 'snake',
-    'spider', 'squirrel', 'streetcar', 'sunflower', 'sweet_pepper', 'table',
-    'tank', 'telephone', 'television', 'tiger', 'tractor', 'train', 'trout',
-    'tulip', 'turtle', 'wardrobe', 'whale', 'willow_tree', 'wolf', 'woman',
-    'worm'
-)
-
+from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
 
 
 class EarlyStopping(object):
@@ -82,8 +70,7 @@ class EarlyStopping(object):
 
 def get_mean_and_std(dataset):
     '''Compute the mean and std value of dataset.'''
-    dataloader = torch.utils.data.DataLoader(
-        dataset, batch_size=1, shuffle=True, num_workers=2)
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=True, num_workers=2)
     mean = torch.zeros(3)
     std = torch.zeros(3)
     print('==> Computing mean and std..')
@@ -115,18 +102,88 @@ def compute_weights_l1_norm(model):
         norm_sum += torch.sum(torch.abs(param))
     return norm_sum
 
-def print_epoch_metrics(writer, result, idx):
+def print_metrics(writer, result, idx):
     for key, value in result.items():
         writer.add_scalar(key, value, idx)
 
 
-def print_batch_metrics(training, writer, result, idx):
-    if training:
-        state = "Train"
-    else:
-        state="Test"
-        
-    writer.add_scalar(f"{state}/Batch_Loss", result["loss"], idx)
+def tensorboard_export_dump(writer):
+    assert isinstance(writer, torch.utils.tensorboard.SummaryWriter)
+    sns.set()
 
+    tf_files = [] # -> list of paths from writer.log_dir to all files in that directory
+    
+    for root, dirs, files in os.walk(writer.log_dir):
+        for file in files:
+            tf_files.append(os.path.join(root,file)) # go over every file recursively in the directory
 
+    for file_id, file in enumerate(tf_files):
 
+        path = os.path.split(file)[0] # determine path to folder in which file lies
+
+        event_acc = EventAccumulator(file)
+        event_acc.Reload()
+        data = {}
+
+        for tag in sorted(event_acc.Tags()["scalars"]):
+            step, value = [], []
+
+            for scalar_event in event_acc.Scalars(tag):
+                step.append(scalar_event.step)
+                value.append(scalar_event.value)
+
+            data[tag] = (step, value)
+
+        if bool(data):
+            with open(path+'/metrics.json', "w") as f:
+                json.dump(data, f)
+    
+    total_metrics = pd.DataFrame(columns=['run', 'tag', 'step', 'value'])
+    for root, dirs, files in os.walk(hydra.utils.to_absolute_path('outputs')):
+        for file in files:
+            metrics = pd.DataFrame(columns=['run', 'tag', 'step', 'value'])
+            if file == 'metrics.json':
+                data = None
+                with open(os.path.join(root,file)) as f:
+                    data = json.load(f)
+                for key, value in data.items():
+                    aux = pd.DataFrame({'step':value[0],'value':value[1]})
+                    aux = aux.assign(run=root.split("\\runs\\")[-1])
+                    aux = aux.assign(tag=key)
+                    metrics = metrics.append(aux, ignore_index=True)
+
+                nr_metrics = len(metrics["tag"].unique())
+                fig_nr_columns = int(max(np.ceil(np.sqrt(nr_metrics)),2))
+                fig_nr_lines = int(np.ceil(nr_metrics/fig_nr_columns))
+                fig, axs = plt.subplots(fig_nr_lines,fig_nr_columns, sharex=False, figsize=(fig_nr_columns*12, fig_nr_lines*12))
+                axs = axs.flatten()
+                for idx, metric in enumerate(metrics["tag"].unique()):
+                    data = metrics.loc[metrics.tag == metric]
+                    axs[idx].set_title(metric)
+                    axs[idx].set_xlim(0, data.step.max()*1.2)
+                    axs[idx].set_xlabel("Batch" if 'Batch' in metric else 'Epoch')
+                    axs[idx].set_ylim(data.value.min()*0.8,data.value.max()*1.2)
+                    axs[idx].xaxis.set_tick_params(labelbottom=True)
+                    ax = sns.lineplot(ax=axs[idx], data=data, x="step", y="value", markers=True)
+
+                fig.savefig(f"{root}/metrics.jpg")
+                total_metrics = total_metrics.append(metrics, ignore_index=True)
+
+    total_metrics.to_csv(hydra.utils.to_absolute_path('outputs')+"/total_metrics.csv")
+
+    nr_metrics = len(total_metrics["tag"].unique())
+    fig_nr_columns = int(max(np.ceil(np.sqrt(nr_metrics)),2))
+    fig_nr_lines = int(np.ceil(nr_metrics/fig_nr_columns))
+    fig, axs = plt.subplots(fig_nr_lines,fig_nr_columns, sharex=False, figsize=(fig_nr_columns*12, fig_nr_lines*12))
+    axs = axs.flatten()
+    for idx, metric in enumerate(total_metrics["tag"].unique()):
+        data = total_metrics.loc[total_metrics.tag == metric]
+        axs[idx].set_title(metric)
+        axs[idx].set_xlim(0,data.step.max()*1.2)
+        axs[idx].set_xlabel("Batch" if 'Batch' in metric else 'Epoch')
+        axs[idx].set_ylim(data.value.min()*0.8, data.value.max()*1.2)
+        axs[idx].xaxis.set_tick_params(labelbottom=True)
+        ax = sns.lineplot(ax=axs[idx], data=data, x="step", y="value", hue='run', style='run', markers=True)
+    fig.savefig(hydra.utils.to_absolute_path('outputs')+"/total_metrics.jpg")
+
+                

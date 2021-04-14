@@ -10,6 +10,3 @@ parameters:
 use_lookahead: True
 lookahead_k: 5
 lookahead_alpha: 0.5
-
-epochs: 200
-es_patience: 100000

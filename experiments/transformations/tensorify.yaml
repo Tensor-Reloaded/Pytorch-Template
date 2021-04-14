@@ -1,0 +1,17 @@
+# @package transformations
+
+train: [
+  {
+    'name':"ToTensor",
+    'parameters':{
+    }
+  },
+]
+
+test: [
+  {
+    'name':"ToTensor",
+    'parameters':{
+    }
+  },
+]

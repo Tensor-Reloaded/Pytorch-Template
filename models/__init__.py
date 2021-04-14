@@ -1,2 +1,3 @@
-from .PreResNet import PreResNet
-from .WideResNet import WideResNet
+from models.PreResNet import *
+from models.WideResNet import *
+from models.DenseNet import *

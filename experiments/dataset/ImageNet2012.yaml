@@ -1,16 +1,13 @@
 # @package dataset
 
-name: "CIFAR-10"
+name: "ImageNet2012"
 
 train_loader_params:
-  root: "${storage_dir}"
-  train: true
-  download: true
+  root: "${storage_dir}/ImageNet/ILSVRC/Data/CLS-LOC/train"
+
 
 test_loader_params:
-  root: ${storage_dir}
-  train: false
-  download: true
+  root: "${storage_dir}/ImageNet/ILSVRC/Data/CLS-LOC/val"
 
 shuffle: True
 
@@ -20,6 +17,6 @@ num_workers_train: 0
 num_workers_test: 0
 train_subset:
 
-num_classes: 10
+num_classes: 1000
 
 update_every: 1

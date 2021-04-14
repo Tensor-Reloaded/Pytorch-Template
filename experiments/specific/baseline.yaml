@@ -2,6 +2,5 @@
 
 aux_save_dir: "Baseline"
 
-optimized_metric: "accuracy"
 
 

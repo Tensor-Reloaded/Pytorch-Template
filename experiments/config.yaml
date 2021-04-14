@@ -2,19 +2,21 @@ defaults:
   - hydra/launcher: basic
   - hydra/sweeper: basic   # nevergrad | basic
   - common: default
-  - dataset: cifar10
+  - dataset: cifar10 #cifar10 #ImageNet2012
   - hyperparameters:  # leave empty for basic sweeper
     optional: true
   - initializer: default
   - loss: crossentropyloss
+  - metrics: default
   - model: PreResNet56
   - optimizer: sgd
   - scheduler: milestones
   - specific: baseline
-  - dataset_model_specific: ${defaults.1.dataset}/${defaults.8.specific}/${defaults.5.model}
+  - transformations: cifar
+  - dataset_model_specific: ${defaults.1.dataset}/${defaults.9.specific}/${defaults.6.model}
     optional: true
 
-model_command: ${model.name}(${model.depth})
-save_dir: "${model_command}/${aux_save_dir}/${seed}"
+storage_dir: "\\\\CRISTIAN-HOME\\Data"
+save_dir: "${model.name}/${aux_save_dir}/${seed}"
 
 load_model: ""

@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as func
 
+__all__ = ['DenseNet', 'DenseNet121', 'DenseNet169', 'DenseNet201', 'DenseNet161', 'densenet_cifar']
 
 class Bottleneck(nn.Module):
     def __init__(self, in_planes, growth_rate):

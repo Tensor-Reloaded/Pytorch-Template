@@ -8,6 +8,7 @@ import re
 from shutil import copyfile
 
 import numpy as np
+from skimage import transform
 import torch.backends.cudnn as cudnn
 import torch.optim as optim
 import torch_optimizer
@@ -20,34 +21,33 @@ import torchvision
 from torch.utils.tensorboard import SummaryWriter
 from torchvision import transforms as transforms
 import hydra
-from hydra import utils
 from omegaconf import DictConfig, OmegaConf
+from sklearn.metrics import cohen_kappa_score
+from torchvision import datasets
 
 from utils import *
-from misc import progress_bar
-from models import *
+from utils.misc import progress_bar
+import models
+
+from timm.data.mixup import Mixup
+from timm.data.dataset import ImageDataset
+from timm.data.loader import create_loader
 
 
 
-
-storage_dir = "../storage/"
 
 @hydra.main(config_path='experiments', config_name='config')
 def main(config: DictConfig):
-    global storage_dir
-
     head, tail = os.path.split(config.save_dir)
     if tail == 'None':
         config.save_dir = head
     else:
         config.save_dir = os.path.join(head, tail)
 
-    storage_dir = os.path.dirname(utils.get_original_cwd()) + "/storage/"
     save_config_path = "runs/" + config.save_dir
     os.makedirs(save_config_path, exist_ok=True)
     with open(os.path.join(save_config_path, "README.md"), 'w+') as f:
         f.write(OmegaConf.to_yaml(config, resolve=True))
-
 
     solver = Solver(config)
     return solver.run()
@@ -64,9 +64,23 @@ class Solver(object):
         self.cuda = config.cuda
         self.train_loader = None
         self.test_loader = None
-        self.es = EarlyStopping(patience=self.args.optimizer.es_patience)
+        self.es = EarlyStopping(patience=self.args.es_patience)
         self.scaler = GradScaler()
         
+        # TODO move this into transformations also. Probably do an exception when loading transformations to check if its mixup, if it is set a flag and use the mixup function in the training loop
+        mixup_args = {
+            'mixup_alpha': 1.,
+            'cutmix_alpha': 0.,
+            'cutmix_minmax': None,
+            'prob': 1.0,
+            'switch_prob': 0.,
+            'mode': 'batch',
+            'label_smoothing': 0,
+            'num_classes': self.args.dataset.num_classes
+        }
+
+        self.mixup_fn = Mixup(**mixup_args)
+
         if not self.args.save_dir:
             self.writer = SummaryWriter()
         else:
@@ -74,83 +88,97 @@ class Solver(object):
 
         self.train_batch_plot_idx = 0
         self.test_batch_plot_idx = 0
-        if self.args.dataset.name == "CIFAR-10":
-            self.nr_classes = len(CIFAR_10_CLASSES)
-        elif self.args.dataset.name == "CIFAR-100":
-            self.nr_classes = len(CIFAR_100_CLASSES)
 
+    
     def load_data(self):
-        if "CIFAR" in self.args.dataset:
-            normalize = transforms.Normalize(
-                mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        if self.args.dataset.name not in datasets:
+            print(f"This dataset is not implemented ({self.args.dataset.name}), go ahead and commit it")
+            exit()
 
-            train_transform = transforms.Compose([transforms.RandomHorizontalFlip(
-            ), transforms.RandomCrop(32, 4), transforms.ToTensor(), normalize])
-            test_transform = transforms.Compose(
-                [transforms.ToTensor(), normalize])
-        else:
-            train_transform = transforms.Compose([transforms.ToTensor()])
-            test_transform = transforms.Compose([transforms.ToTensor()])
+        train_transformations = []
+        for transformation in self.args.transformations.train:
+            if transformation.name not in transformations:
+                print(f"This transformation is not implemented ({transformation.name}), go ahead and commit it")
+                exit()
+            train_transformations.append(transformations[transformation.name](**transformation.parameters))
 
-        if self.args.dataset.name == "CIFAR-10":
-            self.train_set = torchvision.datasets.CIFAR10(
-                root=storage_dir, train=True, download=True, transform=train_transform)
-        elif self.args.dataset.name == "CIFAR-100":
-            self.train_set = torchvision.datasets.CIFAR100(
-                root=storage_dir, train=True, download=True, transform=train_transform)
+        test_transformations = []
+        for transformation in self.args.transformations.test:
+            if transformation.name not in transformations:
+                print(f"This transformation is not implemented ({transformation.name}), go ahead and commit it")
+                exit()
+            test_transformations.append(transformations[transformation.name](**transformation.parameters))
 
-        if self.args.dataset.train_subset is None:
-            self.train_loader = torch.utils.data.DataLoader(dataset=self.train_set, batch_size=self.args.dataset.train_batch_size, shuffle=self.args.dataset.shuffle, num_workers=self.args.dataset.num_workers_train)
-        else:
-            filename = "subset_indices/subset_balanced_{}_{}.data".format(
-                self.args.dataset, self.args.train_subset)
-            if os.path.isfile(filename):
-                with open(filename, 'rb') as f:
-                    subset_indices = pickle.load(f)
-            else:
-                subset_indices = []
-                per_class = self.args.train_subset // self.nr_classes
-                targets = torch.tensor(self.train_set.targets)
-                for i in range(self.nr_classes):
-                    idx = (targets == i).nonzero().view(-1)
-                    perm = torch.randperm(idx.size(0))[:per_class]
-                    subset_indices += idx[perm].tolist()
-                if not os.path.isdir("subset_indices"):
-                    os.makedirs("subset_indices")
-                with open(filename, 'wb') as f:
-                    pickle.dump(subset_indices, f)
-            subset_indices = torch.LongTensor(subset_indices)
-            self.train_loader = torch.utils.data.DataLoader(
-                dataset=self.train_set, batch_size=self.args.dataset.train_batch_size,
-                sampler=SubsetRandomSampler(subset_indices),
-                num_workers=self.args.dataset.num_workers_train)
-            if self.args.validate:
-                self.validate_loader = torch.utils.data.DataLoader(
-                    dataset=self.train_set, batch_size=self.args.dataset.train_batch_size,
-                    sampler=SubsetRandomSampler(subset_indices),
-                    num_workers=self.args.dataset.num_workers_test)
+        train_transform = transforms.Compose(train_transformations) if len(train_transformations) > 0 else None
+        test_transform = transforms.Compose(test_transformations) if len(test_transformations) > 0 else None
 
-        if self.args.dataset.name == "CIFAR-10":
-            self.test_set = torchvision.datasets.CIFAR10(
-                root=storage_dir, train=False, download=True, transform=test_transform)
-        elif self.args.dataset.name == "CIFAR-100":
-            self.test_set = torchvision.datasets.CIFAR100(
-                root=storage_dir, train=False, download=True, transform=test_transform)
+        parameters = OmegaConf.to_container(self.args.dataset.train_loader_params, resolve=True)
+        parameters = {k: v for k, v in parameters.items() if v is not None}
+        parameters["transform"] = train_transform
+        self.train_set = datasets[self.args.dataset.name](**parameters)
 
+        parameters = OmegaConf.to_container(self.args.dataset.test_loader_params, resolve=True)
+        parameters = {k: v for k, v in parameters.items() if v is not None}
+        parameters["transform"] = train_transform
+        self.test_set = datasets[self.args.dataset.name](**parameters)
+        
+        self.train_loader = torch.utils.data.DataLoader(dataset=self.train_set, batch_size=self.args.dataset.train_batch_size, shuffle=self.args.dataset.shuffle, num_workers=self.args.dataset.num_workers_train)
         self.test_loader = torch.utils.data.DataLoader(dataset=self.test_set, batch_size=self.args.dataset.test_batch_size, shuffle=False, num_workers=self.args.dataset.num_workers_test)
 
-    def load_model(self):
+    def init_model(self):
         if self.cuda:
             self.device = torch.device('cuda' + ":" + str(self.args.cuda_device))
             cudnn.benchmark = True
         else:
             self.device = torch.device('cpu')
 
-        self.model = eval(self.args.model_command)
-        self.save_dir = storage_dir + self.args.save_dir
+        parameters = OmegaConf.to_container(self.args.model.parameters, resolve=True)
+        parameters = {k: v for k, v in parameters.items() if v is not None}
+        try:
+            self.model = getattr(models, self.args.model.name)(**parameters)
+        except:
+            print(f"This model is not implemented ({self.args.model.name}), go ahead and commit it")
+            exit()
+
+
+        self.save_dir = os.path.join(self.args.storage_dir,"model_weights",self.args.save_dir)
         if not os.path.isdir(self.save_dir):
             os.makedirs(self.save_dir)
-        self.init_model()
+
+        if self.args.initialization == 1:
+            # xavier init
+            for m in self.model.modules():
+                if isinstance(m, (nn.Conv2d, nn.Linear)):
+                    nn.init.xavier_uniform(
+                        m.weight, gain=nn.init.calculate_gain('relu'))
+        elif self.args.initialization == 2:
+            # he initialization
+            for m in self.model.modules():
+                if isinstance(m, (nn.Conv2d, nn.Linear)):
+                    nn.init.kaiming_normal(m.weight, mode='fan_in')
+        elif self.args.initialization == 3:
+            # selu init
+            for m in self.model.modules():
+                if isinstance(m, nn.Conv2d):
+                    fan_in = m.kernel_size[0] * \
+                        m.kernel_size[1] * m.in_channels
+                    nn.init.normal(m.weight, 0, torch.sqrt(1. / fan_in))
+                elif isinstance(m, nn.Linear):
+                    fan_in = m.in_features
+                    nn.init.normal(m.weight, 0, torch.sqrt(1. / fan_in))
+        elif self.args.initialization == 4:
+            # orthogonal initialization
+            for m in self.model.modules():
+                if isinstance(m, (nn.Conv2d, nn.Linear)):
+                    nn.init.orthogonal(m.weight)
+
+        if self.args.initialization_batch_norm:
+            # batch norm initialization
+            for m in self.model.modules():
+                if isinstance(m, nn.BatchNorm2d):
+                    nn.init.constant(m.weight, 1)
+                    nn.init.constant(m.bias, 0)
+
         if len(self.args.load_model) > 0:
             print("Loading model from " + self.args.load_model)
             self.model.load_state_dict(torch.load(self.args.load_model))
@@ -188,16 +216,55 @@ class Solver(object):
 
         parameters = OmegaConf.to_container(self.args.loss.parameters, resolve=True)
         parameters = {k: v for k, v in parameters.items() if v is not None}
-        self.criterion = losses[self.args.loss.name](**parameters)
+        self.criterion = losses[self.args.loss.name]['constructor'](**parameters)
         
+    def init_metrics(self):
+        self.metrics = {
+            'train':{
+                'batch':[],
+                'epoch':[]
+            },
+            'test':{
+                'batch':[],
+                'epoch':[]
+            },
+            'solver':{
+                'batch':[],
+                'epoch':[]
+            },
+        }
 
-    def get_train_batch_plot_idx(self):
-        self.train_batch_plot_idx += 1
-        return self.train_batch_plot_idx - 1
 
-    def get_test_batch_plot_idx(self):
-        self.test_batch_plot_idx += 1
-        return self.test_batch_plot_idx - 1
+        for metric in self.args.metrics.train:
+            if metric.name not in metrics:
+                print(f"This metric is not implemented ({metric.name}), go ahead and commit it")
+                exit()
+
+            metric_func = metrics[metric.name]['constructor'](**metric.parameters)
+            metric_object = Metric(metric.name, metric_func, solver_metric=False, aggregator=metric.aggregator)
+            for level in metric.levels:
+                self.metrics['train'][level].append(metric_object)
+        
+        for metric in self.args.metrics.test:
+            if metric.name not in metrics:
+                print(f"This metric is not implemented ({metric.name}), go ahead and commit it")
+                exit()
+
+            metric_func = metrics[metric.name]['constructor'](**metric.parameters)
+            metric_object = Metric(metric.name, metric_func, solver_metric=False, aggregator=metric.aggregator)
+            for level in metric.levels:
+                self.metrics['test'][level].append(metric_object)   
+
+        for metric in self.args.metrics.solver:
+            if metric.name not in metrics:
+                print(f"This metric is not implemented ({metric.name}), go ahead and commit it")
+                exit()
+
+            metric_func = metrics[metric.name]['constructor'](**metric.parameters)
+            metric_object = Metric(metric.name, metric_func, solver_metric=True, aggregator=metric.aggregator)
+            for level in metric.levels:
+                self.metrics['solver'][level].append(metric_object)
+
 
     def train(self):
         print("train:")
@@ -206,10 +273,19 @@ class Solver(object):
         correct = 0
         total = 0
 
+        predictions = []
+        targets = []
         for batch_num, (data, target) in enumerate(self.train_loader):
-            data, target = data.to(self.device), target.to(self.device)
-            self.optimizer.zero_grad()
+            if isinstance(data,list):
+                data = [i.to(self.device) for i in data]
+            else:
+                data = data.to(self.device)
+            if isinstance(target,list):
+                target = [i.to(self.device) for i in target]
+            else:
+                target = target.to(self.device)
 
+            self.optimizer.zero_grad()
             if self.args.half:
                 with autocast():
                     output = self.model(data)
@@ -225,27 +301,24 @@ class Solver(object):
                 if self.train_batch_plot_idx % self.args.dataset.update_every == 0:
                     self.optimizer.step()
 
-            batch_loss = loss.item()
-            total_loss += batch_loss
-            print_batch_metrics(True, self.writer,{
-                'loss':batch_loss
-            }, self.get_train_batch_plot_idx())
+            predictions.extend(output)
+            targets.extend(target)
 
-            prediction = torch.max(output, 1)
-            total += target.size(0)
+            metrics_results = {}
+            for metric in self.metrics['train']['batch']:
+                metrics_results["Train/Batch-"+metric.name] = metric.calculate(output, target, level='batch')
 
-            correct += torch.sum((prediction[1] == target).float()).item()
+            for metric in self.metrics['solver']['batch']:
+                    metrics_results["Solver/Batch-"+metric.name] = metric.calculate(solver = self, level='batch')
+
+            print_metrics(self.writer, metrics_results, self.get_train_batch_plot_idx())
 
             if self.args.progress_bar:
-                progress_bar(batch_num, len(self.train_loader), 'Loss: %.4f | Acc: %.3f%% (%d/%d)'
-                             % (total_loss / (batch_num + 1), 100.0 * correct/total, correct, total))
+                progress_bar(batch_num, len(self.train_loader))
             if self.args.scheduler.name == "OneCycleLR":
                 self.scheduler.step()
 
-        return {
-            'Train/Loss':total_loss,
-            'Train/Accuracy':correct / total,
-        }
+        return torch.stack(predictions), torch.stack(targets)
 
     def test(self):
         print("test:")
@@ -254,41 +327,44 @@ class Solver(object):
         correct = 0
         total = 0
 
+        predictions = []
+        targets = []
         with torch.no_grad():
             for batch_num, (data, target) in enumerate(self.test_loader):
-                data, target = data.to(self.device), target.to(self.device)
+                if isinstance(data,list):
+                    data = [i.to(self.device) for i in data]
+                else:
+                    data = data.to(self.device)
+                if isinstance(target,list):
+                    target = [i.to(self.device) for i in target]
+                else:
+                    target = target.to(self.device)
+
                 output = self.model(data)
                 loss = self.criterion(output, target)
 
-                batch_loss = loss.item()
-                total_loss += batch_loss
-                print_batch_metrics(False, self.writer,{
-                    'loss':batch_loss
-                }, self.get_test_batch_plot_idx())
+                predictions.extend(output)
+                targets.extend(target)
 
-                prediction = torch.max(output, 1)
-                total += target.size(0)
+                metrics_results = {}
+                for metric in self.metrics['test']['batch']:
+                    metrics_results["Test/Batch-"+metric.name] = metric.calculate(output, target, level='batch')
+                    
 
-                correct += torch.sum((prediction[1] == target).float()).item()
+                print_metrics(self.writer, metrics_results, self.get_test_batch_plot_idx())
 
                 if self.args.progress_bar:
-                    progress_bar(batch_num, len(self.test_loader), 'Loss: %.4f | Acc: %.3f%% (%d/%d)'
-                                 % (total_loss / (batch_num + 1), 100. * correct / total, correct, total))
+                    progress_bar(batch_num, len(self.test_loader))
 
-        return {
-            'Test/Loss':total_loss,
-            'Test/Accuracy':correct / total,
-        }
+        return torch.stack(predictions), torch.stack(targets)
 
 
-    def save(self, epoch, accuracy, tag=None):
+    def save(self, epoch, metric, tag=None):
         if tag != None:
             tag = "_"+tag
         else:
             tag = ""
-        model_out_path = self.save_dir + \
-            "/model_{}_{}{}.pth".format(
-                epoch, accuracy * 100, tag)
+        model_out_path = os.path.join(self.save_dir, "model_{}_{}{}.pth".format(epoch, metric, tag))
         torch.save(self.model.state_dict(), model_out_path)
         print("Checkpoint saved to {}".format(model_out_path))
 
@@ -296,42 +372,59 @@ class Solver(object):
         if self.args.seed is not None:
             reset_seed(self.args.seed)
         self.load_data()
-        self.load_model()
+        self.init_model()
         self.init_optimizer()
         self.init_scheduler()
         self.init_criterion()
+        self.init_metrics()
 
         if self.cuda:
             if self.args.half:
                 self.model, self.optimizer = amp.initialize(self.model, self.optimizer, opt_level=f"O{self.args.mixpo}",
                                                             patch_torch_functions=True, keep_batchnorm_fp32=True)
-        best_accuracy = 0
-        best_loss = np.inf
         try:
-            for epoch in range(1, self.args.optimizer.epochs + 1):
-                print("\n===> epoch: %d/%d" % (epoch, self.args.optimizer.epochs))
+            best_metrics = {}
+            higher_is_better = metrics[self.args.optimized_metric.split('/')[-1]]['higher_is_better']
+            for epoch in range(1, self.args.epochs + 1):
+                print("\n===> epoch: %d/%d" % (epoch, self.args.epochs))
                 self.epoch = epoch
 
-                train_metrics = self.train()
+                metrics_results = {}
 
-                test_metrics = self.test()
+                predictions, targets = self.train()
+                for metric in self.metrics['train']['epoch']:
+                    metric_name = "Train/"+metric.name 
+                    metrics_results[metric_name] = metric.calculate(predictions, targets, level='epoch')
+                        
+                predictions, targets = self.test()
+                for metric in self.metrics['test']['epoch']:
+                    metric_name = "Test/"+metric.name 
+                    metrics_results[metric_name] = metric.calculate(predictions, targets, level='epoch')
+                    
+                for metric in self.metrics['solver']['epoch']:
+                    metric_name = "Solver/"+metric.name 
+                    metrics_results[metric_name] = metric.calculate(solver = self, level='epoch')
 
-                model_metrics = {
-                    'Train_Params/Learning_rate': self.scheduler.get_last_lr()[0],
-                    'Model/Norm': self.get_model_norm()
-                }
 
-                metrics = train_metrics | test_metrics | model_metrics # Mergeing the 3 dictionaries (Python 3.9)
+                print_metrics(self.writer, metrics_results, self.epoch)
 
-                print_epoch_metrics(self.writer, metrics, self.epoch)
-                
-                if best_loss > metrics['Test/Loss']:
-                    best_loss = metrics['Test/Loss']
+                save_best_metric = False
+                if self.args.optimized_metric not in best_metrics:
+                    best_metrics[self.args.optimized_metric] = metrics_results[self.args.optimized_metric]
+                    save_best_metric = True
+                if higher_is_better:
+                    if  best_metrics[self.args.optimized_metric] < metrics_results[self.args.optimized_metric]:
+                        best_metrics[self.args.optimized_metric] = metrics_results[self.args.optimized_metric]
+                        save_best_metric = True
+                else:
+                    if best_metrics[self.args.optimized_metric] > metrics_results[self.args.optimized_metric]:
+                        best_metrics[self.args.optimized_metric] = metrics_results[self.args.optimized_metric]
+                        save_best_metric = True
 
-                if best_accuracy < metrics['Test/Accuracy']:
-                    best_accuracy = metrics['Test/Accuracy']
-                    self.save(epoch, best_accuracy)
-                    print("===> BEST ACC. PERFORMANCE: %.3f%%" % (best_accuracy * 100))
+
+                if save_best_metric:
+                    self.save(epoch, best_metrics[self.args.optimized_metric])
+                    print("===> BEST "+self.args.optimized_metric+" PERFORMANCE: %.5f" % best_metrics[self.args.optimized_metric])
 
                 if self.args.save_model and epoch % self.args.save_interval == 0:
                     self.save(epoch, 0)
@@ -339,19 +432,19 @@ class Solver(object):
                 if self.args.scheduler.name == "MultiStepLR":
                     self.scheduler.step()
                 elif self.args.scheduler.name == "ReduceLROnPlateau":
-                    self.scheduler.step(metrics["Train/Accuracy"])
+                    self.scheduler.step(metrics_results[self.args.scheduler_metric])
                 elif self.args.scheduler.name == "OneCycleLR":
                     pass
                 else:
                     self.scheduler.step()
 
-                if self.es.step(metrics["Train/Accuracy"]):
+                if self.es.step(metrics_results[self.args.es_metric]):
                     print("Early stopping")
                     raise KeyboardInterrupt
         except KeyboardInterrupt:
             pass
 
-        print("===> BEST ACC. PERFORMANCE: %.3f%%" % (best_accuracy * 100))
+        print("===> BEST "+self.args.optimized_metric+" PERFORMANCE: %.5f" % best_metrics[self.args.optimized_metric])
         files = os.listdir(self.save_dir)
         paths = [os.path.join(self.save_dir, basename) for basename in files if "_0" not in basename]
         if len(paths) > 0:
@@ -359,56 +452,21 @@ class Solver(object):
             copyfile(src, os.path.join("runs", self.args.save_dir, os.path.basename(src)))
 
         with open("runs/" + self.args.save_dir + "/README.md", 'a+') as f:
-            f.write("\n## Accuracy\n %.3f%%" % (best_accuracy * 100))
+            f.write("\n## "+self.args.optimized_metric+"\n %.5f" % (best_metrics[self.args.optimized_metric]))
+        tensorboard_export_dump(self.writer)
         print("Saved best accuracy checkpoint")
 
-        if self.args.optimized_metric == "accuracy":
-            return 1-best_accuracy
-
-        if self.args.optimized_metric == "loss":
-            return best_loss
+        return best_metrics[self.args.optimized_metric]
 
 
-    def get_model_norm(self, norm_type=2):
-        norm = 0.0
-        for param in self.model.parameters():
-            norm += torch.norm(input=param, p=norm_type, dtype=torch.float)
-        return norm
+    def get_train_batch_plot_idx(self):
+        self.train_batch_plot_idx += 1
+        return self.train_batch_plot_idx - 1
 
-    def init_model(self):
-        if self.args.initialization == 1:
-            # xavier init
-            for m in self.model.modules():
-                if isinstance(m, (nn.Conv2d, nn.Linear)):
-                    nn.init.xavier_uniform(
-                        m.weight, gain=nn.init.calculate_gain('relu'))
-        elif self.args.initialization == 2:
-            # he initialization
-            for m in self.model.modules():
-                if isinstance(m, (nn.Conv2d, nn.Linear)):
-                    nn.init.kaiming_normal(m.weight, mode='fan_in')
-        elif self.args.initialization == 3:
-            # selu init
-            for m in self.model.modules():
-                if isinstance(m, nn.Conv2d):
-                    fan_in = m.kernel_size[0] * \
-                        m.kernel_size[1] * m.in_channels
-                    nn.init.normal(m.weight, 0, torch.sqrt(1. / fan_in))
-                elif isinstance(m, nn.Linear):
-                    fan_in = m.in_features
-                    nn.init.normal(m.weight, 0, torch.sqrt(1. / fan_in))
-        elif self.args.initialization == 4:
-            # orthogonal initialization
-            for m in self.model.modules():
-                if isinstance(m, (nn.Conv2d, nn.Linear)):
-                    nn.init.orthogonal(m.weight)
+    def get_test_batch_plot_idx(self):
+        self.test_batch_plot_idx += 1
+        return self.test_batch_plot_idx - 1
 
-        if self.args.initialization_batch_norm:
-            # batch norm initialization
-            for m in self.model.modules():
-                if isinstance(m, nn.BatchNorm2d):
-                    nn.init.constant(m.weight, 1)
-                    nn.init.constant(m.bias, 0)
 
 
 if __name__ == '__main__':
