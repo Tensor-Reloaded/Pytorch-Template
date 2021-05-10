@@ -1,18 +1,23 @@
-hydra-core>=1.0.0
-numpy==1.20.1
-omegaconf==2.0.6
-torch_optimizer==0.1.0
-tensorboard==2.4.1
+hydra-core #>=1.0.0
+numpy #==1.20.1
+omegaconf #==2.0.6
+tensorboard #==2.4.1
 
-torch==1.8.0+cu111
-torchvision==0.9.0+cu111
-torchaudio===0.8.0
--f https://download.pytorch.org/whl/torch_stable.html
+torch==1.8.1+cu111 --find-links https://download.pytorch.org/whl/torch_stable.html
+torchvision==0.9.1+cu111 --find-links https://download.pytorch.org/whl/torch_stable.html
+torchaudio --find-links https://download.pytorch.org/whl/torch_stable.html
+torchtext --find-links https://download.pytorch.org/whl/torch_stable.html
+pystiche --find-links https://download.pytorch.org/whl/torch_stable.html
+torch_optimizer #==0.1.0
 
-scikit-learn==0.24.1
-scikit-image==0.18.1
-nibabel==3.2.1
-imageio==2.9.0
-einops==0.3.0
-timm==0.4.5
-seaborn==0.11.1
+
+scikit-learn #==0.24.1
+scikit-image #==0.18.1
+nibabel #==3.2.1
+imageio #==2.9.0
+einops #==0.3.0
+timm #==0.4.5
+seaborn #==0.11.1
+pandas #~=1.2.4
+matplotlib #~=3.4.1
+scipy #~=1.6.3

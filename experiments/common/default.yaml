@@ -1,16 +1,16 @@
 # @package _global_
 
-half: False
-mixpo: 1
+half: True
 cuda: True
 cuda_device: 0
 seed:
-progress_bar: False
+progress_bar: True
 
 save_model: False
 save_interval: 5
 
 epochs: 200
+test_every: 1
 es_patience: 100000
 es_metric: 'Train/Accuracy'
 scheduler_metric: 'Train/Accuracy'

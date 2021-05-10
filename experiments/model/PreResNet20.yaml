@@ -2,5 +2,5 @@
 
 name: PreResNet
 parameters:
-  depth: 18
+  depth: 20
   dataset: 'cifar10'

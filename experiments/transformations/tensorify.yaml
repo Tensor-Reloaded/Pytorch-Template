@@ -1,17 +1,33 @@
 # @package transformations
 
-train: [
-  {
-    'name':"ToTensor",
-    'parameters':{
-    }
-  },
-]
-
-test: [
-  {
-    'name':"ToTensor",
-    'parameters':{
-    }
-  },
-]
+train:
+  data: [
+    {
+      'name':"ImageToTensor",
+      'parameters':{
+      }
+    },
+  ]
+  target: [
+  ]
+  both: [
+    
+  ]
+  output: [
+  ]
+  
+test:
+  data: [
+    {
+      'name':"ImageToTensor",
+      'parameters':{
+      }
+    },
+  ]
+  target: [
+  ]
+  both: [
+    
+  ]
+  output: [
+  ]

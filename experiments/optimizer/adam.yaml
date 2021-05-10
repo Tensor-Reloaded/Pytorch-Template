@@ -1,0 +1,18 @@
+# @package optimizer
+
+name: "Adam"
+parameters:
+  lr: 0.000001
+  betas: [0.9, 0.999]
+  eps: 0.00000001
+  weight_decay: 0.0
+  amsgrad: False
+
+max_norm: 1.0
+
+use_lookahead: False
+lookahead_k: 10
+lookahead_alpha: 0.5
+
+use_SAM: False
+SAM_rho: 0.05

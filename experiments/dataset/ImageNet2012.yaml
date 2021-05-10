@@ -12,7 +12,7 @@ test_loader_params:
 shuffle: True
 
 train_batch_size: 128
-test_batch_size: 512
+test_batch_size: 128
 num_workers_train: 0
 num_workers_test: 0
 train_subset:
@@ -20,3 +20,13 @@ train_subset:
 num_classes: 1000
 
 update_every: 1
+
+#mixup_args:
+#  mixup_alpha: 0.0
+#  cutmix_alpha: 1.0
+#  cutmix_minmax:
+#  prob: 1.0
+#  switch_prob: 0.0
+#  mode: 'batch'
+#  label_smoothing: 0.1
+#  num_classes: 5

@@ -42,17 +42,19 @@ class Accuracy(object):
         pass
 
     def __call__(self, prediction, target):
-        prediction = torch.max(prediction, 1)[1]
+        prediction = prediction.argmax(dim=-1)
+        target = target.argmax(dim=-1)
         correct = (prediction == target).sum().item()
         return correct / prediction.size(0)
 
 class Cohen_Kappa_Score(object):
     # https://scikit-learn.org/stable/modules/generated/sklearn.metrics.cohen_kappa_score.html
-    def __init__(self, weights = None, sample_weight = None):
+    def __init__(self, weights = None, sample_weight = None, labels = None):
         self.weights = weights
         self.sample_weight = sample_weight
+        self.labels = labels
     def __call__(self, prediction, target):
-        return cohen_kappa_score(prediction, target, weights=self.weights, sample_weight=self.sample_weight)
+        return cohen_kappa_score(prediction.detach().argmax(dim=-1).cpu().long().numpy(), target.detach().argmax(dim=-1).cpu().long().numpy(), weights=self.weights, sample_weight=self.sample_weight, labels=self.labels)
 
 class Model_Norm(object):
     def __init__(self, norm_type=2):
@@ -69,7 +71,7 @@ class Learning_Rate(object):
         pass
 
     def __call__(self, solver):
-        return solver.scheduler.get_last_lr()[0]
+        return solver.optimizer.param_groups[0]['lr']
 
 metrics = {
     'Accuracy': {

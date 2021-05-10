@@ -8,8 +8,14 @@ parameters:
       - 0.999
   eps: 0.001
   initial_accumulator: 0.000001
-  weight_decay: 0
+  weight_decay: 0.001
+
+max_norm: 1.0
+
 
 use_lookahead: True
-lookahead_k: 5
+lookahead_k: 10
 lookahead_alpha: 0.5
+
+use_SAM: False
+SAM_rho: 0.05

@@ -110,6 +110,44 @@ class TorchStableBCELoss(torch.nn.modules.Module):
         return loss.mean()
 
 
+
+class SoftTargetCrossEntropy(torch.nn.modules.Module):
+
+    def __init__(self, class_weights = None, device='cuda'):
+        super(SoftTargetCrossEntropy, self).__init__()
+        self.device = device
+        self.class_weights = None
+        if class_weights != None:
+            self.class_weights = torch.Tensor(class_weights).to(self.device)
+
+    def forward(self, x, target):
+        lsm = F.log_softmax(x, dim=-1)
+        if self.class_weights != None:
+            lsm = lsm * self.class_weights
+        loss = torch.sum(-target * lsm, dim=-1)
+        return loss.mean()
+
+
+
+
+class CrossEntropyLoss(torch.nn.modules.Module):
+
+    def __init__(self, class_weights = None, device='cuda', half=True):
+        super(CrossEntropyLoss, self).__init__()
+        self.device = device
+        if class_weights != None:
+            w = torch.Tensor(class_weights).to(self.device)
+            if half:
+                w = w.half()
+            self.fnc = nn.CrossEntropyLoss(weight=w)
+        else:
+            self.fnc = nn.CrossEntropyLoss()
+
+    def forward(self, prediction, target):
+        return self.fnc(prediction,target.argmax(-1))
+
+
+
 losses = {
     'l1loss': {
         'constructor': nn.L1Loss,
@@ -124,7 +162,7 @@ losses = {
         'higher_is_better': False
     },
     'crossentropyloss': {
-        'constructor': nn.CrossEntropyLoss,
+        'constructor': CrossEntropyLoss,
         'higher_is_better': False
     },
     'nllloss': {
@@ -179,4 +217,8 @@ losses = {
         'constructor': TorchDiceLoss,
         'higher_is_better': False
     },
+    'SoftTargetCrossEntropy': {
+        'constructor': SoftTargetCrossEntropy,
+        'higher_is_better': False
+    }
 }

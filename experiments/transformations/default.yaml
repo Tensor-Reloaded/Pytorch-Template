@@ -1,7 +1,23 @@
 # @package transformations
 
-train: [
-]
-
-test: [
-]
+train:
+  data: [
+  ]
+  target: [
+  ]
+  both: [
+    
+  ]
+  output: [
+  ]
+  
+test:
+  data: [
+  ]
+  target: [
+  ]
+  both: [
+    
+  ]
+  output: [
+  ]

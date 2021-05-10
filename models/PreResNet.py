@@ -74,6 +74,8 @@ class PreResNet(nn.Module):
             self.fc = nn.Linear(cfg[-1], 10)
         elif dataset == 'cifar100':
             self.fc = nn.Linear(cfg[-1], 100)
+        elif dataset == 'imagenet2012':
+            self.fc = nn.Linear(12544, 1000)
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
