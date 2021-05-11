@@ -8,6 +8,7 @@ parameters:
   nesterov: True
 
 max_norm: 1.0
+grad_penalty: 0.0
 
 
 use_lookahead: True

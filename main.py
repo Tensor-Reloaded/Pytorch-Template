@@ -401,6 +401,25 @@ class Solver(object):
                     output = self.train_output_transform(output)
                 loss = self.criterion(output, target)
                 loss = loss / self.args.dataset.update_every
+
+            if self.args.optimizer.grad_penalty is not None and self.args.optimizer.grad_penalty > 0.0:
+                # Creates gradients
+                scaled_grad_params = torch.autograd.grad(outputs=self.scaler.scale(loss), inputs=self.model.parameters(), create_graph=True)
+
+                #Creates unscaled grad_params before computing the penalty. scaled_grad_params are
+                # not owned by any optimizer, so ordinary division is used instead of scaler.unscale_:
+                inv_scale = 1./self.scaler.get_scale()
+                grad_params = [p * inv_scale for p in scaled_grad_params]
+
+                # Computes the penalty term and adds it to the loss
+                with autocast():
+                    grad_norm = 0
+                    for grad in grad_params:
+                        grad_norm += grad.pow(2).sum()
+                    grad_norm = grad_norm.sqrt()
+                    loss = loss + (grad_norm * self.args.optimizer.grad_penalty)
+
+
             self.scaler.scale(loss).backward()
 
             def sam_closure():
@@ -412,6 +431,24 @@ class Solver(object):
                             output = self.train_output_transform(output)
                         loss = self.criterion(output, accumulation_target[i])
                         loss = loss / self.args.dataset.update_every
+                    
+                    if self.args.optimizer.grad_penalty is not None and self.args.optimizer.grad_penalty is not False and self.args.optimizer.grad_penalty > 0.0:
+                        # Creates gradients
+                        scaled_grad_params = torch.autograd.grad(outputs=self.scaler.scale(loss), inputs=self.model.parameters(), create_graph=True)
+
+                        #Creates unscaled grad_params before computing the penalty. scaled_grad_params are
+                        # not owned by any optimizer, so ordinary division is used instead of scaler.unscale_:
+                        inv_scale = 1./self.scaler.get_scale()
+                        grad_params = [p * inv_scale for p in scaled_grad_params]
+
+                        # Computes the penalty term and adds it to the loss
+                        with autocast():
+                            grad_norm = 0
+                            for grad in grad_params:
+                                grad_norm += grad.pow(2).sum()
+                            grad_norm = grad_norm.sqrt()
+                            loss = loss + (grad_norm * self.args.optimizer.grad_penalty)
+
                     self.scaler.scale(loss).backward()
                     self.scaler.unscale_(self.optimizer)
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.optimizer.max_norm)
