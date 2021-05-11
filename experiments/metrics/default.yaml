@@ -10,10 +10,10 @@ train: [
     'higher_is_better': True,
   },
   {
-    'name':"crossentropyloss",
+    'name':"bcewithlogits",
     'parameters':{
     },
-    'aggregator': 'sum',
+    'aggregator': 'mean',
     'levels': ['batch', 'epoch'],
     'higher_is_better': False,
   },
@@ -29,10 +29,10 @@ test: [
     'higher_is_better': True,
   },
   {
-    'name':"crossentropyloss",
+    'name':"bcewithlogits",
     'parameters':{
     },
-    'aggregator': 'sum',
+    'aggregator': 'mean',
     'levels': ['batch', 'epoch'],
     'higher_is_better': False,
   },

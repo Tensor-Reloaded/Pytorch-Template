@@ -7,8 +7,7 @@ parameters:
   momentum: 0.9
   nesterov: True
 
-max_norm: 6.0
-
+max_norm: 1.0
 
 
 use_lookahead: True

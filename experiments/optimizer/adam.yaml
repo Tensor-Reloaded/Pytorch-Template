@@ -10,8 +10,8 @@ parameters:
 
 max_norm: 1.0
 
-use_lookahead: False
-lookahead_k: 10
+use_lookahead: True
+lookahead_k: 8
 lookahead_alpha: 0.5
 
 use_SAM: False

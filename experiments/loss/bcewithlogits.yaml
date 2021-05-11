@@ -1,6 +1,6 @@
 # @package loss
 
-name: "crossentropyloss"
+name: "bcewithlogits"
 parameters:
   class_weights: 
   reduce : 

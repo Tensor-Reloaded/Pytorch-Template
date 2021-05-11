@@ -147,6 +147,23 @@ class CrossEntropyLoss(torch.nn.modules.Module):
         return self.fnc(prediction,target.argmax(-1))
 
 
+class BCEWithLogitsLoss(torch.nn.modules.Module):
+
+    def __init__(self, class_weights = None, device='cuda', half=True):
+        super(BCEWithLogitsLoss, self).__init__()
+        self.device = device
+        if class_weights != None:
+            w = torch.Tensor(class_weights).to(self.device)
+            if half:
+                w = w.half()
+            self.fnc = nn.BCEWithLogitsLoss(weight=w)
+        else:
+            self.fnc = nn.BCEWithLogitsLoss()
+
+    def forward(self, prediction, target):
+        return self.fnc(prediction,target)
+
+
 
 losses = {
     'l1loss': {
@@ -182,7 +199,7 @@ losses = {
         'higher_is_better': False
     },
     'bcewithlogits': {
-        'constructor': nn.BCEWithLogitsLoss,
+        'constructor': BCEWithLogitsLoss,
         'higher_is_better': False
     },
     'hinge': {

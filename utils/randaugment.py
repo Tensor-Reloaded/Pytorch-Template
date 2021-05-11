@@ -226,10 +226,10 @@ def augment_list():  # 16 oeprations and their ranges
     augment = [
         (AutoContrast, 0, 1),
         (Equalize, 0, 1),
-        # (Invert, 0, 1),
+        (Invert, 0, 1),
         (Rotate, 0, 30),
-        # (Solarize, 0, 256),
-        # (SolarizeAdd, 0, 110),
+        (Solarize, 0, 256),
+        (SolarizeAdd, 0, 110),
         (Brightness, 0.1, 1.9),
         (Sharpness, 0.1, 1.9),
         (ShearX, 0., 0.3),

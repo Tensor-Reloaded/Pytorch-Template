@@ -62,7 +62,7 @@ class Solver(object):
         self.test_loader = None
         self.infer_loader = None
         self.es = EarlyStopping(patience=self.args.es_patience)
-        self.scaler = GradScaler()
+        self.scaler = GradScaler(enabled=self.args.half)
 
 
         if not self.args.save_dir:
@@ -361,12 +361,23 @@ class Solver(object):
                 self.metrics['solver'][level].append(metric_object)
 
 
+    def disable_bn(self):
+        for module in self.model.modules():
+            if isinstance(module, nn.modules.batchnorm._NormBase) or isinstance(module, nn.LayerNorm):
+                module.eval()
+
+    def enable_bn(self):
+        self.model.train()
+
     def train(self):
         print("train:")
         self.model.train()
         total_loss = 0
         correct = 0
         total = 0
+
+        accumulation_data = []
+        accumulation_target = []
 
         predictions = []
         targets = []
@@ -379,40 +390,49 @@ class Solver(object):
                 target = [i.to(self.device) for i in target]
             else:
                 target = target.to(self.device)
-            if self.args.half:
-                with autocast():
-                    output = self.model(data)
-                    if self.train_output_transform is not None:
-                        output = self.train_output_transform(output)
-                    loss = self.criterion(output, target)
-                    loss = loss / self.args.dataset.update_every
 
-                self.scaler.scale(loss).backward()
-                if self.train_batch_plot_idx % self.args.dataset.update_every == 0:
-                    self.scaler.unscale_(self.optimizer)
-                    # Since the gradients of optimizer's assigned params are unscaled, clips as usual:
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.optimizer.max_norm)
+            if self.args.optimizer.use_SAM:
+                accumulation_data.append(data)
+                accumulation_target.append(target)
 
-                    # optimizer's gradients are already unscaled, so scaler.step does not unscale them,
-                    # although it still skips optimizer.step() if the gradients contain infs or NaNs.
-
-                    self.scaler.step(self.optimizer)
-                    self.scaler.update()
-                    self.optimizer.zero_grad()
-
-            else:
+            with autocast(enabled=self.args.half):
                 output = self.model(data)
                 if self.train_output_transform is not None:
                     output = self.train_output_transform(output)
                 loss = self.criterion(output, target)
                 loss = loss / self.args.dataset.update_every
-                loss.backward()
-                if self.train_batch_plot_idx % self.args.dataset.update_every == 0:
-                    self.optimizer.step()
+            self.scaler.scale(loss).backward()
+
+            def sam_closure():
+                self.disable_bn()
+                for i in range(len(accumulation_data)):
+                    with autocast(enabled=self.args.half):
+                        output = self.model(accumulation_data[i])
+                        if self.train_output_transform is not None:
+                            output = self.train_output_transform(output)
+                        loss = self.criterion(output, accumulation_target[i])
+                        loss = loss / self.args.dataset.update_every
+                    self.scaler.scale(loss).backward()
+                    self.scaler.unscale_(self.optimizer)
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.optimizer.max_norm)
+                self.enable_bn()
+                
+
+
+            if self.train_batch_plot_idx % self.args.dataset.update_every == 0:
+                self.scaler.unscale_(self.optimizer)
+                
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.optimizer.max_norm)
+                self.scaler.step(self.optimizer, sam_closure if self.args.optimizer.use_SAM else None)
+                self.scaler.update()
+
+                self.optimizer.zero_grad()
+                accumulation_data = []
+                accumulation_target = []
 
             predictions.extend(output)
             targets.extend(target)
-
+            
             metrics_results = {}
             for metric in self.metrics['train']['batch']:
                 metrics_results["Train/Batch-"+metric.name] = metric.calculate(output, target, level='batch')

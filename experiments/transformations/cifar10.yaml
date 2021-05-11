@@ -19,6 +19,23 @@ train:
       'parameters':{
       }
     },
+    # {
+    #   'name':'RandAugment',
+    #   'parameters':
+    #   {
+    #     'N': 2,
+    #     'M': 15,
+    #     'std': 1.0
+    #   }
+    # },
+    # {
+    #   'name':'RandomErasing',
+    #   'parameters':
+    #   {
+    #     'min_area': 0.05,
+    #     'max_area': 0.15
+    #   },
+    # },
     {
       'name':"ImageNormalize",
       'parameters':{
