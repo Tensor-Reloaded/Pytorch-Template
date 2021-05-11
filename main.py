@@ -395,75 +395,96 @@ class Solver(object):
                 accumulation_data.append(data)
                 accumulation_target.append(target)
 
-            with autocast(enabled=self.args.half):
-                output = self.model(data)
-                if self.train_output_transform is not None:
-                    output = self.train_output_transform(output)
-                loss = self.criterion(output, target)
-                loss = loss / self.args.dataset.update_every
+            while True: 
+                with autocast(enabled=self.args.half):
+                    output = self.model(data)
+                    if self.train_output_transform is not None:
+                        output = self.train_output_transform(output)
+                    loss = self.criterion(output, target)
+                    loss = loss / self.args.dataset.update_every
 
-            if self.args.optimizer.grad_penalty is not None and self.args.optimizer.grad_penalty > 0.0:
-                # Creates gradients
-                scaled_grad_params = torch.autograd.grad(outputs=self.scaler.scale(loss), inputs=self.model.parameters(), create_graph=True)
+                if self.args.optimizer.grad_penalty is not None and self.args.optimizer.grad_penalty > 0.0:
+                    # Creates gradients
+                    scaled_grad_params = torch.autograd.grad(outputs=self.scaler.scale(loss), inputs=self.model.parameters(), create_graph=True)
 
-                #Creates unscaled grad_params before computing the penalty. scaled_grad_params are
-                # not owned by any optimizer, so ordinary division is used instead of scaler.unscale_:
-                inv_scale = 1./self.scaler.get_scale()
-                grad_params = [p * inv_scale for p in scaled_grad_params]
+                    #Creates unscaled grad_params before computing the penalty. scaled_grad_params are
+                    # not owned by any optimizer, so ordinary division is used instead of scaler.unscale_:
+                    inv_scale = 1./self.scaler.get_scale()
+                    grad_params = [p * inv_scale for p in scaled_grad_params]
 
-                # Computes the penalty term and adds it to the loss
-                with autocast():
-                    grad_norm = 0
-                    for grad in grad_params:
-                        grad_norm += grad.pow(2).sum()
-                    grad_norm = grad_norm.sqrt()
-                    loss = loss + (grad_norm * self.args.optimizer.grad_penalty)
+                    # Computes the penalty term and adds it to the loss
+                    with autocast():
+                        grad_norm = 0
+                        for grad in grad_params:
+                            grad_norm += grad.pow(2).sum()
+                        grad_norm = grad_norm.sqrt()
+                        loss = loss + (grad_norm * self.args.optimizer.grad_penalty)
 
 
-            self.scaler.scale(loss).backward()
+                self.scaler.scale(loss).backward()
 
-            def sam_closure():
-                self.disable_bn()
-                for i in range(len(accumulation_data)):
-                    with autocast(enabled=self.args.half):
-                        output = self.model(accumulation_data[i])
-                        if self.train_output_transform is not None:
-                            output = self.train_output_transform(output)
-                        loss = self.criterion(output, accumulation_target[i])
-                        loss = loss / self.args.dataset.update_every
+                def sam_closure():
+                    self.disable_bn()
+                    for i in range(len(accumulation_data)):
+                        with autocast(enabled=self.args.half):
+                            output = self.model(accumulation_data[i])
+                            if self.train_output_transform is not None:
+                                output = self.train_output_transform(output)
+                            loss = self.criterion(output, accumulation_target[i])
+                            loss = loss / self.args.dataset.update_every
+                        
+                        if self.args.optimizer.grad_penalty is not None and self.args.optimizer.grad_penalty is not False and self.args.optimizer.grad_penalty > 0.0:
+                            # Creates gradients
+                            scaled_grad_params = torch.autograd.grad(outputs=self.scaler.scale(loss), inputs=self.model.parameters(), create_graph=True)
+
+                            #Creates unscaled grad_params before computing the penalty. scaled_grad_params are
+                            # not owned by any optimizer, so ordinary division is used instead of scaler.unscale_:
+                            inv_scale = 1./self.scaler.get_scale()
+                            grad_params = [p * inv_scale for p in scaled_grad_params]
+
+                            # Computes the penalty term and adds it to the loss
+                            with autocast():
+                                grad_norm = 0
+                                for grad in grad_params:
+                                    grad_norm += grad.pow(2).sum()
+                                grad_norm = grad_norm.sqrt()
+                                loss = loss + (grad_norm * self.args.optimizer.grad_penalty)
+
+                        self.scaler.scale(loss).backward()
+                        self.scaler.unscale_(self.optimizer)
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.optimizer.max_norm)
+                    self.enable_bn()
                     
-                    if self.args.optimizer.grad_penalty is not None and self.args.optimizer.grad_penalty is not False and self.args.optimizer.grad_penalty > 0.0:
-                        # Creates gradients
-                        scaled_grad_params = torch.autograd.grad(outputs=self.scaler.scale(loss), inputs=self.model.parameters(), create_graph=True)
-
-                        #Creates unscaled grad_params before computing the penalty. scaled_grad_params are
-                        # not owned by any optimizer, so ordinary division is used instead of scaler.unscale_:
-                        inv_scale = 1./self.scaler.get_scale()
-                        grad_params = [p * inv_scale for p in scaled_grad_params]
-
-                        # Computes the penalty term and adds it to the loss
-                        with autocast():
-                            grad_norm = 0
-                            for grad in grad_params:
-                                grad_norm += grad.pow(2).sum()
-                            grad_norm = grad_norm.sqrt()
-                            loss = loss + (grad_norm * self.args.optimizer.grad_penalty)
-
-                    self.scaler.scale(loss).backward()
+                if self.train_batch_plot_idx % self.args.dataset.update_every == 0:
                     self.scaler.unscale_(self.optimizer)
+                    
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.optimizer.max_norm)
-                self.enable_bn()
-                
 
+
+                if self.args.optimizer.batch_replay:
+                    found_inf = False
+                    for _, param in self.model.named_parameters():
+                        if  param.grad.isnan().any() or param.grad.isinf().any(): #param.grad.norm()
+                            found_inf = True
+                            break
+                    if found_inf:
+                        self.scaler.update()
+                        self.optimizer.zero_grad()
+                        self.args.optimizer.batch_replay -= 1
+                    else:
+                        break
+                else:
+                    break
 
             if self.train_batch_plot_idx % self.args.dataset.update_every == 0:
-                self.scaler.unscale_(self.optimizer)
+                # self.scaler.unscale_(self.optimizer)
                 
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.optimizer.max_norm)
+                # torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.optimizer.max_norm)
                 self.scaler.step(self.optimizer, sam_closure if self.args.optimizer.use_SAM else None)
                 self.scaler.update()
 
                 self.optimizer.zero_grad()
+
                 accumulation_data = []
                 accumulation_target = []
 

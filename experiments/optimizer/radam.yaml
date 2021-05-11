@@ -10,6 +10,8 @@ parameters:
 max_norm: 1.0
 grad_penalty: 0.0
 
+batch_replay: 10
+
 use_lookahead: True
 lookahead_k: 8
 lookahead_alpha: 0.5
