@@ -22,7 +22,7 @@ train_subset:
 
 num_classes: 10
 
-update_every: 1
+update_every: 100
 
 #mixup_args:
 #  mixup_alpha: 0.0

@@ -420,7 +420,6 @@ class Solver(object):
                         grad_norm = grad_norm.sqrt()
                         loss = loss + (grad_norm * self.args.optimizer.grad_penalty)
 
-
                 self.scaler.scale(loss).backward()
 
                 def sam_closure():
@@ -464,13 +463,14 @@ class Solver(object):
                 if self.args.optimizer.batch_replay:
                     found_inf = False
                     for _, param in self.model.named_parameters():
-                        if  param.grad.isnan().any() or param.grad.isinf().any(): #param.grad.norm()
+                        if  param.grad.isnan().any() or param.grad.isinf().any():
                             found_inf = True
                             break
                     if found_inf:
                         self.scaler.update()
                         self.optimizer.zero_grad()
-                        self.args.optimizer.batch_replay -= 1
+                        if type(self.args.optimizer.batch_replay) == int or type(self.args.optimizer.batch_replay) == float: 
+                            self.args.optimizer.batch_replay -= 1
                     else:
                         break
                 else:
