@@ -7,13 +7,12 @@ parameters:
   eps: 0.00000001
   weight_decay: 0.000001
 
-max_norm: 1.0
+max_norm: 2.0
 grad_penalty: 0.0
-
 batch_replay: False
 
 use_lookahead: True
-lookahead_k: 8
+lookahead_k: 4
 lookahead_alpha: 0.5
 
 use_SAM: False

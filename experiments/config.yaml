@@ -17,7 +17,7 @@ defaults:
     optional: true
 
 storage_dir: "\\\\CRISTIAN-HOME\\Data"
-save_dir: "${model.name}/${aux_save_dir}/${seed}"
+save_dir: "${dataset.name}/${model.name}/${aux_save_dir}/${seed}"
 
 load_model: ""
 

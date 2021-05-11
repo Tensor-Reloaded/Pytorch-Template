@@ -287,11 +287,11 @@ class Solver(object):
 
         self.optimizer = self.optimizer(**parameters)
         
-        if self.args.optimizer.use_lookahead:
-            self.optimizer = torch_optimizer.Lookahead(self.optimizer, k=self.args.optimizer.lookahead_k, alpha=self.args.optimizer.lookahead_alpha)
-        
         if self.args.optimizer.use_SAM:
             self.optimizer = optimizers['SAM'](base_optimizer=self.optimizer,rho=self.args.optimizer.SAM_rho)
+        
+        if self.args.optimizer.use_lookahead:
+            self.optimizer = torch_optimizer.Lookahead(self.optimizer, k=self.args.optimizer.lookahead_k, alpha=self.args.optimizer.lookahead_alpha)
 
     def init_scheduler(self):
         if self.args.scheduler.name not in schedulers:
@@ -454,11 +454,6 @@ class Solver(object):
                         torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.optimizer.max_norm)
                     self.enable_bn()
                     
-                if self.train_batch_plot_idx % self.args.dataset.update_every == 0:
-                    self.scaler.unscale_(self.optimizer)
-                    
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.optimizer.max_norm)
-
 
                 if self.args.optimizer.batch_replay:
                     found_inf = False
@@ -477,10 +472,10 @@ class Solver(object):
                     break
 
             if self.train_batch_plot_idx % self.args.dataset.update_every == 0:
-                # self.scaler.unscale_(self.optimizer)
+                self.scaler.unscale_(self.optimizer)
                 
-                # torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.optimizer.max_norm)
-                self.scaler.step(self.optimizer, sam_closure if self.args.optimizer.use_SAM else None)
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.optimizer.max_norm)
+                self.scaler.step(self.optimizer, closure=sam_closure if self.args.optimizer.use_SAM else None)
                 self.scaler.update()
 
                 self.optimizer.zero_grad()
