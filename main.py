@@ -32,7 +32,7 @@ import models
 
 
 
-@hydra.main(config_path='experiments', config_name='config')
+@hydra.main(config_path='configs', config_name='config')
 def main(config: DictConfig):
     head, tail = os.path.split(config.save_dir)
     if tail == 'None':
