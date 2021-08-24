@@ -10,8 +10,7 @@ except ImportError:  # py3k
 
 
 class TorchDiceLoss(nn.Module):
-    def __init__(self, weight=None, size_average=True,
-                 per_image=False, logits=False):
+    def __init__(self, weight=None, size_average=True, per_image=False, logits=False):
         super().__init__()
         self.size_average = size_average
         self.register_buffer('weight', weight)
@@ -32,6 +31,9 @@ class TorchDiceLoss(nn.Module):
         union = torch.sum(dice_output, dim=1) + torch.sum(dice_target, dim=1) + eps
         loss = (1 - (2 * intersection + eps) / union).mean()
         return loss
+
+
+
 
 
 class TorchFocalLoss(nn.Module):
@@ -129,39 +131,37 @@ class SoftTargetCrossEntropy(torch.nn.modules.Module):
 
 
 
-
 class CrossEntropyLoss(torch.nn.modules.Module):
 
-    def __init__(self, class_weights = None, device='cuda', half=True):
+    def __init__(self, class_weights = None, device='cuda', reduction='mean'):
         super(CrossEntropyLoss, self).__init__()
         self.device = device
         if class_weights != None:
             w = torch.Tensor(class_weights).to(self.device)
-            if half:
-                w = w.half()
-            self.fnc = nn.CrossEntropyLoss(weight=w)
+            self.fnc = nn.CrossEntropyLoss(weight=w, reduction=reduction)
         else:
-            self.fnc = nn.CrossEntropyLoss()
+            self.fnc = nn.CrossEntropyLoss(reduction=reduction)
 
     def forward(self, prediction, target):
-        return self.fnc(prediction,target.argmax(-1))
+        return self.fnc(prediction.float(),target.argmax(-1))
+
+
 
 
 class BCEWithLogitsLoss(torch.nn.modules.Module):
 
-    def __init__(self, class_weights = None, device='cuda', half=True):
+    def __init__(self, class_weights = None, device='cuda'):
         super(BCEWithLogitsLoss, self).__init__()
         self.device = device
         if class_weights != None:
             w = torch.Tensor(class_weights).to(self.device)
-            if half:
-                w = w.half()
             self.fnc = nn.BCEWithLogitsLoss(weight=w)
         else:
             self.fnc = nn.BCEWithLogitsLoss()
 
     def forward(self, prediction, target):
         return self.fnc(prediction,target)
+
 
 
 

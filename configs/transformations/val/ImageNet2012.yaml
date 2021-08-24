@@ -1,0 +1,20 @@
+# @package transformations
+
+ImageResize:
+  size: 256
+
+ImageCenterCrop:
+  size: 224
+  apply_to: 'input'
+
+ImageToTensor:
+  apply_to: 'input'
+
+ImageNormalize:
+  mean: [0.485, 0.456, 0.406]
+  std: [0.229, 0.224, 0.225]
+  apply_to: 'input'
+
+OneHot:
+  num_classes: 1000
+  apply_to: 'target'

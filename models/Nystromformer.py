@@ -10,7 +10,6 @@ from einops import rearrange, reduce
 __all__ = ['NystromAttention','Nystromformer']
 
 
-
 def exists(val):
     return val is not None
 
@@ -62,6 +61,8 @@ class NystromAttention(nn.Module):
             nn.Dropout(dropout)
         )
 
+        self.record = nn.Identity()
+
         self.residual = residual
         if residual:
             kernel_size = residual_conv_kernel
@@ -92,7 +93,7 @@ class NystromAttention(nn.Module):
             mask = rearrange(mask, 'b n -> b () n')
             q, k, v = map(lambda t: t * mask[..., None], (q, k, v))
 
-        q *= self.scale
+        q = q * self.scale
 
         # generate landmarks by sum reduction, and then calculate mean using the mask
 
@@ -134,6 +135,8 @@ class NystromAttention(nn.Module):
         attn1, attn2, attn3 = map(lambda t: t.softmax(dim = -1), (sim1, sim2, sim3))
         attn2_inv = moore_penrose_iter_pinv(attn2, iters)
 
+        _ = self.record(attn1 @ attn2_inv @ attn3)
+
         out = (attn1 @ attn2_inv) @ (attn3 @ v)
 
         # add depth-wise conv residual of values
@@ -165,12 +168,23 @@ class PreNorm(nn.Module):
         x = self.norm(x)
         return self.fn(x, **kwargs)
 
+
+class GEGLU(nn.Module):
+    def __init__(self, dim_in, dim_out):
+        super().__init__()
+        self.proj = nn.Linear(dim_in, dim_out * 2)
+
+    def forward(self, x):
+        x, gate = self.proj(x).chunk(2, dim = -1)
+        return x * F.gelu(gate)
+
 class FeedForward(nn.Module):
     def __init__(self, dim, mult = 4, dropout = 0.):
         super().__init__()
         self.net = nn.Sequential(
-            nn.Linear(dim, dim * mult),
-            nn.GELU(),
+            GEGLU(dim, dim * mult),
+            # nn.Linear(dim, dim*mult),
+            # nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(dim * mult, dim)
         )
@@ -202,7 +216,7 @@ class Nystromformer(nn.Module):
                 PreNorm(dim, FeedForward(dim = dim, dropout = ff_dropout))
             ]))
 
-    def forward(self, x, mask = None):
+    def forward(self, x, mask = None, return_attn = False):
         for attn, ff in self.layers:
             x = attn(x, mask = mask) + x
             x = ff(x) + x

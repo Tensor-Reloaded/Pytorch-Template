@@ -61,8 +61,18 @@ class PreResNet(nn.Module):
 
         self.inplanes = 16
 
-        self.conv1 = nn.Conv2d(3, 16, kernel_size=3, padding=1,
-                               bias=False)
+        in_channels = 3
+        if dataset == 'cifar10':
+            self.fc = nn.Linear(cfg[-1], 10)
+            in_channels = 3
+        elif dataset == 'cifar100':
+            self.fc = nn.Linear(cfg[-1], 100)
+            in_channels = 3
+        elif dataset == 'imagenet2012':
+            self.fc = nn.Linear(12544, 1000)
+            in_channels = 3
+
+        self.conv1 = nn.Conv2d(in_channels, 16, kernel_size=3, padding=1, bias=False)
         self.layer1 = self._make_layer(block, 16, n, cfg = cfg[0:3*n])
         self.layer2 = self._make_layer(block, 32, n, cfg = cfg[3*n:6*n], stride=2)
         self.layer3 = self._make_layer(block, 64, n, cfg = cfg[6*n:9*n], stride=2)
@@ -70,12 +80,7 @@ class PreResNet(nn.Module):
         self.relu = nn.ReLU(inplace=True)
         self.avgpool = nn.AvgPool2d(8)
 
-        if dataset == 'cifar10':
-            self.fc = nn.Linear(cfg[-1], 10)
-        elif dataset == 'cifar100':
-            self.fc = nn.Linear(cfg[-1], 100)
-        elif dataset == 'imagenet2012':
-            self.fc = nn.Linear(12544, 1000)
+
 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):

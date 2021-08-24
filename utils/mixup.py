@@ -304,7 +304,7 @@ class FastCollateMixup(Mixup):
         else:
             lam = self._mix_batch_collate(output, batch)
         target = torch.stack([b[1] for b in batch])
-        target = mixup_target(target, self.num_classes, lam, self.label_smoothing, device='cuda')
+        target = mixup_target(target, self.num_classes, lam, self.label_smoothing, device='cpu')
         target = target[:batch_size]
         return output, target
 

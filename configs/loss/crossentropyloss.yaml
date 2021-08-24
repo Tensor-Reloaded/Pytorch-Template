@@ -1,7 +1,5 @@
 # @package loss
 
-name: "crossentropyloss"
-parameters:
-  class_weights: 
-  reduce : 
-  half: ${half}
+crossentropyloss:
+  class_weights:
+  reduction: 'mean' 

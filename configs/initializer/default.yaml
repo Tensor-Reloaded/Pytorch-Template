@@ -1,4 +1,4 @@
 # @package _global_
 
-initialization: 4
+initialization: 2
 initialization_batch_norm: True

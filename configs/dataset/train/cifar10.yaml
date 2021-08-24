@@ -1,0 +1,33 @@
+# @package dataset
+
+name: "CIFAR-10"
+
+load_params:
+  root: "${storage_dir}"
+  train: true
+  download: true
+save_in_memory: true
+
+shuffle: True
+batch_size: 128
+num_workers: 4
+pin_memory: false
+drop_last: true
+
+subset: 0.0
+update_every: 1
+
+transform: train/cifar10
+
+# mixup_args:
+#  mixup_alpha: 0.0
+#  cutmix_alpha: 1.0
+#  cutmix_minmax:
+#  prob: 1.0
+#  switch_prob: 0.0
+#  mode: 'batch'
+#  label_smoothing: 0.1
+#  num_classes: 5
+
+
+

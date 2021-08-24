@@ -1,0 +1,21 @@
+# @package dataset
+
+name: "CIFAR-100"
+
+load_params:
+  root: "${storage_dir}"
+  train: false
+  download: true
+save_in_memory: true
+
+shuffle: false
+batch_size: 128
+num_workers: 4
+pin_memory: false
+drop_last: false
+
+subset: 0.0
+
+
+transform: val/cifar10
+

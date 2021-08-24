@@ -5,10 +5,12 @@ import argparse
 import pickle
 import os
 import re
+from multiprocessing import Process, freeze_support
 from shutil import copyfile
 import pandas as pd
 
 import numpy as np
+from collections import OrderedDict
 from skimage import transform
 import torch.backends.cudnn as cudnn
 import torch.optim as optim
@@ -22,9 +24,9 @@ import torchvision
 from torch.utils.tensorboard import SummaryWriter
 from torchvision import transforms as transforms
 import hydra
+from hydra.utils import get_original_cwd, to_absolute_path
 from omegaconf import DictConfig, OmegaConf
 from sklearn.metrics import cohen_kappa_score
-from torchvision import datasets
 
 from utils import *
 from utils.misc import progress_bar
@@ -56,13 +58,13 @@ class Solver(object):
         self.criterion = None
         self.optimizer = None
         self.scheduler = None
-        self.device = None
-        self.cuda = config.cuda
+        self.device = self.args.device
+        self.cuda = True if 'cuda' in self.device else False
         self.train_loader = None
-        self.test_loader = None
+        self.val_loader = None
         self.infer_loader = None
         self.es = EarlyStopping(patience=self.args.es_patience)
-        self.scaler = GradScaler(enabled=self.args.half)
+        self.scaler = GradScaler(enabled=self.args.half and self.args.grad_scaler)
 
 
         if not self.args.save_dir:
@@ -71,130 +73,98 @@ class Solver(object):
             self.writer = SummaryWriter(log_dir="runs/" + self.args.save_dir)
 
         self.train_batch_plot_idx = 0
-        self.test_batch_plot_idx = 0
+        self.val_batch_plot_idx = 0
 
+    def construct_transformations(self, transformation_config):
+        transformations_config = OmegaConf.load(to_absolute_path(f'configs/transformations/{transformation_config}.yaml'))
 
-    def load_data(self):
-        if self.args.dataset.name not in datasets:
-            print(f"This dataset is not implemented ({self.args.dataset.name}), go ahead and commit it")
-            exit()
-        train_cache_index = 0
-        train_data_transformations = []
-        for idx, transformation in enumerate(self.args.transformations.train.data):
-            if transformation.name not in transformations:
-                print(f"This transformation is not implemented ({transformation.name}), go ahead and commit it")
+        cache_index = None
+        transformation_list = []
+        for idx, (name,parameters) in enumerate(transformations_config.items()):
+            if name not in transformations:
+                print(f"This transformation is not implemented ({name}), go ahead and commit it")
                 exit()
-            if hasattr(transformation, 'cache_point'):
-                train_cache_index = idx+1
-            train_data_transformations.append(transformations[transformation.name](**transformation.parameters))
 
-        train_target_transformations = []
-        for transformation in self.args.transformations.train.target:
-            if transformation.name not in transformations:
-                print(f"This transformation is not implemented ({transformation.name}), go ahead and commit it")
-                exit()
-            train_target_transformations.append(transformations[transformation.name](**transformation.parameters))
+            apply_to = None
+            if 'apply_to' in parameters:
+                apply_to = parameters.pop('apply_to')
+            transformation = transformations[name]
+            if cache_index is None and not transformation['cacheable']:
+                cache_index = idx
+            transformation_fnc = TransformWrapper(transformation['constructor'](**parameters), apply_to)
+            transformation_list.append(transformation_fnc)
+        if cache_index is None:
+            cache_index = idx
+        transformation_list = transforms.Compose(transformation_list) if len(transformation_list) > 0 else None
+        return transformation_list, cache_index
 
-        train_both_transformations = []
-        for transformation in self.args.transformations.train.both:
-            if transformation.name not in transformations:
-                print(f"This transformation is not implemented ({transformation.name}), go ahead and commit it")
-                exit()
-            train_both_transformations.append(transformations[transformation.name](**transformation.parameters))
-
-        train_output_transformations = []
-        for transformation in self.args.transformations.train.output:
-            if transformation.name not in transformations:
-                print(f"This transformation is not implemented ({transformation.name}), go ahead and commit it")
-                exit()
-            train_output_transformations.append(transformations[transformation.name](**transformation.parameters))
-
-        train_data_transform = transforms.Compose(train_data_transformations) if len(train_data_transformations) > 0 else None
-        train_target_transform = transforms.Compose(train_target_transformations) if len(train_target_transformations) > 0 else None
-        train_both_transform = transforms.Compose(train_both_transformations) if len(train_both_transformations) > 0 else None
-        self.train_output_transform = transforms.Compose(train_output_transformations) if len(train_output_transformations) > 0 else None
-
-        test_cache_index = 0
-        test_data_transformations = []
-        for idx, transformation in enumerate(self.args.transformations.test.data):
-            if transformation.name not in transformations:
-                print(f"This transformation is not implemented ({transformation.name}), go ahead and commit it")
-                exit()
-            if hasattr(transformation, 'cache_point'):
-                test_cache_index = idx+1
-            test_data_transformations.append(transformations[transformation.name](**transformation.parameters))
-
-        test_target_transformations = []
-        for transformation in self.args.transformations.test.target:
-            if transformation.name not in transformations:
-                print(f"This transformation is not implemented ({transformation.name}), go ahead and commit it")
-                exit()
-            test_target_transformations.append(transformations[transformation.name](**transformation.parameters))
-
-        test_both_transformations = []
-        for transformation in self.args.transformations.test.both:
-            if transformation.name not in transformations:
-                print(f"This transformation is not implemented ({transformation.name}), go ahead and commit it")
-                exit()
-            test_both_transformations.append(transformations[transformation.name](**transformation.parameters))
-
-        test_output_transformations = []
-        for transformation in self.args.transformations.test.output:
-            if transformation.name not in transformations:
-                print(f"This transformation is not implemented ({transformation.name}), go ahead and commit it")
-                exit()
-            test_output_transformations.append(transformations[transformation.name](**transformation.parameters))
-
-        test_data_transform = transforms.Compose(test_data_transformations) if len(test_data_transformations) > 0 else None
-        test_target_transform = transforms.Compose(test_target_transformations) if len(test_target_transformations) > 0 else None
-        test_both_transform = transforms.Compose(test_both_transformations) if len(test_both_transformations) > 0 else None
-        self.test_output_transform = transforms.Compose(test_output_transformations) if len(test_output_transformations) > 0 else None
-
-
-        parameters = OmegaConf.to_container(self.args.dataset.train_loader_params, resolve=True)
+    def construct_dataset(self, dataset_config, transformations, cache_index=0):
+        parameters = OmegaConf.to_container(dataset_config.load_params, resolve=True)
         parameters = {k: v for k, v in parameters.items() if v is not None}
-        if self.args.dataset.name in ['CIFAR-10','CIFAR-100','ImageNet2012']:
-            parameters["transform"] = train_data_transform
-            parameters["target_transform"] = train_target_transform
-        else:
-            parameters["data_transform"] = train_data_transform
-            parameters["target_transform"] = train_target_transform
-            parameters["both_transform"] = train_both_transform
-            parameters['cache_index'] = train_cache_index
-        self.train_set = datasets[self.args.dataset.name](**parameters)
 
-        parameters = OmegaConf.to_container(self.args.dataset.test_loader_params, resolve=True)
-        parameters = {k: v for k, v in parameters.items() if v is not None}
-        if self.args.dataset.name in ['CIFAR-10','CIFAR-100','ImageNet2012']:
-            parameters["transform"] = test_data_transform
-            parameters["target_transform"] = test_target_transform
-        else:
-            parameters["data_transform"] = test_data_transform
-            parameters["target_transform"] = test_target_transform
-            parameters["both_transform"] = test_both_transform
-            parameters['cache_index'] = test_cache_index
-        self.test_set = datasets[self.args.dataset.name](**parameters)
+        dataset = MemoryStoredDataset(dataset=datasets[dataset_config.name](**parameters), transformations=transformations, save_in_memory=dataset_config.save_in_memory, cache_index=cache_index)
 
-        if hasattr(self.args.dataset, 'mixup_args') and self.args.dataset.mixup_args != None:
-            collate_fn = FastCollateMixup(**self.args.dataset.mixup_args)
+        return dataset
+
+    def construct_dataloader(self, dataset_config, dataset):
+        if hasattr(dataset_config, 'mixup_args') and dataset_config.mixup_args != None:
+            collate_fn = FastCollateMixup(**dataset_config.mixup_args)
         else:
             collate_fn = None
 
-        self.train_loader = torch.utils.data.DataLoader(dataset=self.train_set, batch_size=self.args.dataset.train_batch_size, shuffle=self.args.dataset.shuffle, num_workers=self.args.dataset.num_workers_train, collate_fn=collate_fn, drop_last=True, persistent_workers=self.args.dataset.num_workers_train>0)
-        self.test_loader = torch.utils.data.DataLoader(dataset=self.test_set, batch_size=self.args.dataset.test_batch_size, shuffle=False, num_workers=self.args.dataset.num_workers_test, persistent_workers=self.args.dataset.num_workers_test>0)
-        if self.args.infer_only is True:
-            parameters = OmegaConf.to_container(self.args.dataset.infer_loader_params, resolve=True)
-            parameters = {k: v for k, v in parameters.items() if v is not None}
-            parameters["data_transform"] = test_data_transform
-            parameters["target_transform"] = test_target_transform
-            parameters["both_transform"] = test_both_transform
-            self.infer_set = datasets[self.args.dataset.name](**parameters)
-            self.infer_loader = torch.utils.data.DataLoader(dataset=self.infer_set, batch_size=self.args.dataset.test_batch_size, shuffle=False, num_workers=self.args.dataset.num_workers_test, persistent_workers=self.args.dataset.num_workers_test>0)
+        if not hasattr(dataset_config, 'subset') or dataset_config.subset is None or dataset_config.subset == '' or dataset_config.subset <= 0:
+            sampler = None
+        else:
+            indices = ((np.random.random(len(dataset)) < dataset_config.subset).nonzero()[0]).tolist()
+            sampler = SubsetRandomSampler(indices)
+            dataset_config.shuffle = False
+        
+        loader = torch.utils.data.DataLoader(dataset=dataset, batch_size=dataset_config.batch_size, shuffle=(dataset_config.shuffle and sampler is None), sampler=sampler, num_workers=dataset_config.num_workers, collate_fn=collate_fn, pin_memory=dataset_config.pin_memory, drop_last=dataset_config.drop_last, persistent_workers=dataset_config.num_workers>0)
+        return loader
+
+    def init_dataset(self):
+        if hasattr(self.args, 'train_dataset'):
+            if self.args.train_dataset.name not in datasets:
+                print(f"This dataset is not implemented ({self.args.train_dataset.name}), go ahead and commit it")
+                exit()
+            if hasattr(self.args.train_dataset, 'transform'):
+                train_transformations, train_cache_index = self.construct_transformations(self.args.train_dataset.transform)
+            else:
+                train_transformations, train_cache_index = None, None
+            self.train_set = self.construct_dataset(self.args.train_dataset, train_transformations, train_cache_index)
+            self.train_loader = self.construct_dataloader(self.args.train_dataset, self.train_set)
+
+    
+        if hasattr(self.args, 'val_dataset'):
+            if self.args.val_dataset.name not in datasets:
+                print(f"This dataset is not implemented ({self.args.val_dataset.name}), go ahead and commit it")
+                exit()
+            if hasattr(self.args.val_dataset, 'transform'):
+                val_transformations, val_cache_index = self.construct_transformations(self.args.val_dataset.transform)
+            else:
+                val_transformations, val_cache_index = None, None
+            self.val_set = self.construct_dataset(self.args.val_dataset, val_transformations, val_cache_index)
+            self.val_loader = self.construct_dataloader(self.args.val_dataset, self.val_set)
+
+        if hasattr(self.args, 'infer_dataset'):
+            if self.args.infer_dataset.name not in datasets:
+                print(f"This dataset is not implemented ({self.args.infer_dataset.name}), go ahead and commit it")
+                exit()
+            if hasattr(self.args.infer_dataset, 'transform'):
+                infer_transformations, infer_cache_index = self.construct_transformations(self.args.infer_dataset.transform)
+            else:
+                infer_transformations, infer_cache_index = None, None
+            self.infer_set = self.construct_dataset(self.args.infer_dataset, infer_transformations, infer_cache_index)
+            self.infer_loader = self.construct_dataloader(self.args.infer_dataset, self.infer_set)
+
+        self.output_transformations = None
+        if hasattr(self.args, 'output_transformation'):
+            self.output_transformations, _ = self.construct_transformations(self.args.output_transformation)
+
 
 
     def init_model(self):
         if self.cuda:
-            self.device = torch.device('cuda' + ":" + str(self.args.cuda_device))
             cudnn.benchmark = True
 
             # The flag below controls whether to allow TF32 on matmul. This flag defaults to True.
@@ -229,7 +199,7 @@ class Solver(object):
             # he initialization
             for m in self.model.modules():
                 if isinstance(m, (nn.Conv2d, nn.Linear)):
-                    nn.init.kaiming_normal(m.weight, mode='fan_in')
+                    nn.init.kaiming_normal_(m.weight, mode='fan_in')
         elif self.args.initialization == 3:
             # selu init
             for m in self.model.modules():
@@ -255,20 +225,20 @@ class Solver(object):
 
         if len(self.args.load_model) > 0:
             print("Loading model from " + self.args.load_model)
-            self.model.load_state_dict(torch.load(self.args.load_model))
+            if self.args.model.name == "Recorder":
+                loaded_model = torch.load(self.args.load_model, map_location=self.device)
+                new_state_dict = OrderedDict()
 
-            # for param in self.model.parameters():
-            #     param.requires_grad = True
-            # for param in self.model.patch_embed.parameters():
-            #     param.requires_grad = True
-            # for param in self.model.norm.parameters():
-            #     param.requires_grad = True
-            # for param in self.model.avgpool.parameters():
-            #     param.requires_grad = True
-            # for param in self.model.head.parameters():
-            #     param.requires_grad = True
+                for key, value in loaded_model.items():
+                    # if key.startswith('net.transformer.'):
+                        # new_state_dict[key[16:]] = value
+                    if key.startswith('net.'):
+                        new_state_dict[key[4:]] = value
 
-
+                # self.model.vit.transformer.load_state_dict(new_state_dict)
+                self.model.vit.load_state_dict(new_state_dict)
+            else:
+                self.model.load_state_dict(torch.load(self.args.load_model, map_location=self.device))
         self.model = self.model.to(self.device)
 
     def init_optimizer(self):
@@ -285,33 +255,38 @@ class Solver(object):
                 print(f"This optimizer is not implemented ({self.args.optimizer.name}), go ahead and commit it")
                 exit()
 
-        self.optimizer = self.optimizer(**parameters)
         
         if self.args.optimizer.use_SAM:
-            self.optimizer = optimizers['SAM'](base_optimizer=self.optimizer,rho=self.args.optimizer.SAM_rho)
+            self.optimizer = optimizers['SAM'](params=parameters["params"],base_optimizer=self.optimizer,rho=self.args.optimizer.SAM_rho)
+        else:
+            self.optimizer = self.optimizer(**parameters)
         
         if self.args.optimizer.use_lookahead:
             self.optimizer = torch_optimizer.Lookahead(self.optimizer, k=self.args.optimizer.lookahead_k, alpha=self.args.optimizer.lookahead_alpha)
 
     def init_scheduler(self):
-        if self.args.scheduler.name not in schedulers:
-            print(f"This loss is not implemented ({self.args.scheduler.name}), go ahead and commit it")
+        (name,parameters) = self.args.scheduler.items()[0]
+        self.scheduler_name = name
+        if name not in schedulers:
+            print(f"This scheduler is not implemented ({name}), go ahead and commit it")
             exit()
 
-        parameters = OmegaConf.to_container(self.args.scheduler.parameters, resolve=True)
+        parameters = OmegaConf.to_container(parameters, resolve=True)
         parameters = {k: v for k, v in parameters.items() if v is not None}
         parameters["optimizer"] = self.optimizer
-        self.scheduler = schedulers[self.args.scheduler.name](**parameters)
+        self.scheduler = schedulers[name](**parameters)
 
     def init_criterion(self):
-        if self.args.loss.name not in losses:
-            print(f"This loss is not implemented ({self.args.loss.name}), go ahead and commit it")
+        (name,parameters) = self.args.loss.items()[0]
+        if name not in losses:
+            print(f"This loss is not implemented ({name}), go ahead and commit it")
             exit()
 
-        parameters = OmegaConf.to_container(self.args.loss.parameters, resolve=True)
+        parameters = OmegaConf.to_container(parameters, resolve=True)
         parameters = {k: v for k, v in parameters.items() if v is not None}
+        parameters["device"] = self.device
 
-        self.criterion = losses[self.args.loss.name]['constructor'](**parameters)
+        self.criterion = losses[name]['constructor'](**parameters)
 
     def init_metrics(self):
         self.metrics = {
@@ -319,7 +294,7 @@ class Solver(object):
                 'batch':[],
                 'epoch':[]
             },
-            'test':{
+            'val':{
                 'batch':[],
                 'epoch':[]
             },
@@ -330,34 +305,50 @@ class Solver(object):
         }
 
 
-        for metric in self.args.metrics.train:
-            if metric.name not in metrics:
-                print(f"This metric is not implemented ({metric.name}), go ahead and commit it")
+        for (name,args) in self.args.train_metrics.items():
+            if name not in metrics:
+                print(f"This metric is not implemented ({name}), go ahead and commit it")
                 exit()
 
-            metric_func = metrics[metric.name]['constructor'](**metric.parameters)
-            metric_object = Metric(metric.name, metric_func, solver_metric=False, aggregator=metric.aggregator)
-            for level in metric.levels:
+            if not hasattr(args, 'index'):
+                metric_index = None
+            else:
+                metric_index = args.index
+
+            if args.parameters is None:
+                args.parameters = {}
+            metric_func = metrics[name]['constructor'](**args.parameters)
+            metric_object = Metric(name, metric_func, index=metric_index, solver_metric=False, aggregator=args.aggregator)
+            for level in args.levels:
                 self.metrics['train'][level].append(metric_object)
 
-        for metric in self.args.metrics.test:
-            if metric.name not in metrics:
-                print(f"This metric is not implemented ({metric.name}), go ahead and commit it")
+        for (name,args)  in self.args.val_metrics.items():
+            if name not in metrics:
+                print(f"This metric is not implemented ({name}), go ahead and commit it")
                 exit()
 
-            metric_func = metrics[metric.name]['constructor'](**metric.parameters)
-            metric_object = Metric(metric.name, metric_func, solver_metric=False, aggregator=metric.aggregator)
-            for level in metric.levels:
-                self.metrics['test'][level].append(metric_object)
+            if not hasattr(args, 'index'):
+                metric_index = None
+            else:
+                metric_index = args.index
+                
+            if args.parameters is None:
+                args.parameters = {}
+            metric_func = metrics[name]['constructor'](**args.parameters)
+            metric_object = Metric(name, metric_func, index=metric_index, solver_metric=False, aggregator=args.aggregator)
+            for level in args.levels:
+                self.metrics['val'][level].append(metric_object)
 
-        for metric in self.args.metrics.solver:
-            if metric.name not in metrics:
-                print(f"This metric is not implemented ({metric.name}), go ahead and commit it")
+        for (name,args)  in self.args.solver_metrics.items():
+            if name not in metrics:
+                print(f"This metric is not implemented ({name}), go ahead and commit it")
                 exit()
 
-            metric_func = metrics[metric.name]['constructor'](**metric.parameters)
-            metric_object = Metric(metric.name, metric_func, solver_metric=True, aggregator=metric.aggregator)
-            for level in metric.levels:
+            if args.parameters is None:
+                args.parameters = {}
+            metric_func = metrics[name]['constructor'](**args.parameters)
+            metric_object = Metric(name, metric_func, index=None, solver_metric=True, aggregator=args.aggregator)
+            for level in args.levels:
                 self.metrics['solver'][level].append(metric_object)
 
 
@@ -376,32 +367,97 @@ class Solver(object):
         correct = 0
         total = 0
 
-        accumulation_data = []
-        accumulation_target = []
+        # accumulation_data = []
+        # accumulation_target = []
 
         predictions = []
         targets = []
         for batch_num, (data, target) in enumerate(self.train_loader):
-            if isinstance(data,list):
+            if isinstance(data,list) or isinstance(data,tuple):
                 data = [i.to(self.device) for i in data]
             else:
                 data = data.to(self.device)
-            if isinstance(target,list):
+            if isinstance(target,list) or isinstance(target,tuple):
                 target = [i.to(self.device) for i in target]
             else:
                 target = target.to(self.device)
 
-            if self.args.optimizer.use_SAM:
-                accumulation_data.append(data)
-                accumulation_target.append(target)
+            # if self.args.optimizer.use_SAM:
+            #     accumulation_data.append(data)
+            #     accumulation_target.append(target)
+
+
+            
+            def sam_closure():
+                self.disable_bn()
+                while True: 
+                    with autocast(enabled=self.args.half):
+                        output = self.model(data)
+                        if self.output_transformations is not None:
+                            output = self.output_transformations(output)
+                        
+                        if hasattr(self.args.model, 'returns_loss') and self.args.model.returns_loss:
+                            loss = output
+                        else:
+                            loss = self.criterion(output, target)
+                        loss = loss / self.args.train_dataset.update_every
+
+                    if self.args.optimizer.grad_penalty is not None and self.args.optimizer.grad_penalty > 0.0:
+                        # Creates gradients
+                        scaled_grad_params = torch.autograd.grad(outputs=self.scaler.scale(loss), inputs=self.model.parameters(), create_graph=True)
+
+                        #Creates unscaled grad_params before computing the penalty. scaled_grad_params are
+                        # not owned by any optimizer, so ordinary division is used instead of scaler.unscale_:
+                        inv_scale = 1./self.scaler.get_scale()
+                        grad_params = [p * inv_scale for p in scaled_grad_params]
+
+                        # Computes the penalty term and adds it to the loss
+                        with autocast():
+                            grad_norm = 0
+                            for grad in grad_params:
+                                grad_norm += grad.pow(2).sum()
+                            grad_norm = grad_norm.sqrt()
+                            loss = loss + (grad_norm * self.args.optimizer.grad_penalty)
+
+                    self.scaler.scale(loss).backward()
+
+                    if self.args.optimizer.batch_replay:
+                        found_inf = False
+                        for _, param in self.model.named_parameters():
+                            if  param.grad.isnan().any() or param.grad.isinf().any():
+                                found_inf = True
+                                break
+                        if found_inf:
+                            self.scaler.update()
+                            self.optimizer.zero_grad()#(set_to_none=True)
+                            if type(self.args.optimizer.batch_replay) == int or type(self.args.optimizer.batch_replay) == float: 
+                                self.args.optimizer.batch_replay -= 1
+                        else:
+                            break
+                    else:
+                        break
+
+                if self.train_batch_plot_idx % self.args.train_dataset.update_every == 0:
+                    self.scaler.unscale_(self.optimizer)
+                    
+                    if self.args.optimizer.max_norm > 0.0:
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.optimizer.max_norm)
+                    self.enable_bn()
+                
+
+
 
             while True: 
                 with autocast(enabled=self.args.half):
                     output = self.model(data)
-                    if self.train_output_transform is not None:
-                        output = self.train_output_transform(output)
-                    loss = self.criterion(output, target)
-                    loss = loss / self.args.dataset.update_every
+                    if self.output_transformations is not None:
+                        output = self.output_transformations(output)
+                    
+                    if hasattr(self.args.model, 'returns_loss') and self.args.model.returns_loss:
+                        loss = output
+                    else:
+                        loss = self.criterion(output, target)
+                    loss = loss / self.args.train_dataset.update_every
 
                 if self.args.optimizer.grad_penalty is not None and self.args.optimizer.grad_penalty > 0.0:
                     # Creates gradients
@@ -422,39 +478,6 @@ class Solver(object):
 
                 self.scaler.scale(loss).backward()
 
-                def sam_closure():
-                    self.disable_bn()
-                    for i in range(len(accumulation_data)):
-                        with autocast(enabled=self.args.half):
-                            output = self.model(accumulation_data[i])
-                            if self.train_output_transform is not None:
-                                output = self.train_output_transform(output)
-                            loss = self.criterion(output, accumulation_target[i])
-                            loss = loss / self.args.dataset.update_every
-                        
-                        if self.args.optimizer.grad_penalty is not None and self.args.optimizer.grad_penalty is not False and self.args.optimizer.grad_penalty > 0.0:
-                            # Creates gradients
-                            scaled_grad_params = torch.autograd.grad(outputs=self.scaler.scale(loss), inputs=self.model.parameters(), create_graph=True)
-
-                            #Creates unscaled grad_params before computing the penalty. scaled_grad_params are
-                            # not owned by any optimizer, so ordinary division is used instead of scaler.unscale_:
-                            inv_scale = 1./self.scaler.get_scale()
-                            grad_params = [p * inv_scale for p in scaled_grad_params]
-
-                            # Computes the penalty term and adds it to the loss
-                            with autocast():
-                                grad_norm = 0
-                                for grad in grad_params:
-                                    grad_norm += grad.pow(2).sum()
-                                grad_norm = grad_norm.sqrt()
-                                loss = loss + (grad_norm * self.args.optimizer.grad_penalty)
-
-                        self.scaler.scale(loss).backward()
-                        self.scaler.unscale_(self.optimizer)
-                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.optimizer.max_norm)
-                    self.enable_bn()
-                    
-
                 if self.args.optimizer.batch_replay:
                     found_inf = False
                     for _, param in self.model.named_parameters():
@@ -463,7 +486,7 @@ class Solver(object):
                             break
                     if found_inf:
                         self.scaler.update()
-                        self.optimizer.zero_grad()
+                        self.optimizer.zero_grad()#(set_to_none=True)
                         if type(self.args.optimizer.batch_replay) == int or type(self.args.optimizer.batch_replay) == float: 
                             self.args.optimizer.batch_replay -= 1
                     else:
@@ -471,20 +494,54 @@ class Solver(object):
                 else:
                     break
 
-            if self.train_batch_plot_idx % self.args.dataset.update_every == 0:
+            if self.train_batch_plot_idx % self.args.train_dataset.update_every == 0:
                 self.scaler.unscale_(self.optimizer)
                 
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.optimizer.max_norm)
-                self.scaler.step(self.optimizer, closure=sam_closure if self.args.optimizer.use_SAM else None)
+                if self.args.optimizer.max_norm > 0.0:
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.optimizer.max_norm)
+                
+                if self.args.optimizer.use_SAM:
+                    self.scaler.step(self.optimizer, closure=sam_closure)
+                    # self.model.update_moving_average()
+                else:
+                    self.scaler.step(self.optimizer)
+                    # self.model.update_moving_average()
+
                 self.scaler.update()
 
-                self.optimizer.zero_grad()
+                self.optimizer.zero_grad()#(set_to_none=True)
+                
+                if self.scheduler_name == "OneCycleLR":
+                    self.scheduler.step()
 
-                accumulation_data = []
-                accumulation_target = []
 
-            predictions.extend(output)
-            targets.extend(target)
+            if isinstance(output,list) or isinstance(output,tuple):
+                for pred_idx, o in enumerate(output):
+                    o=o.cpu()
+                    if len(predictions) <= pred_idx:
+                        predictions.append(torch.tensor(o))
+                    else:
+                        predictions[pred_idx] = torch.cat((predictions[pred_idx], o))
+            else:
+                output=output.cpu()
+                if isinstance(output, torch.Tensor):
+                    predictions = output.clone().detach()
+                else:
+                    predictions = torch.tensor(output)
+
+            if isinstance(target,list) or isinstance(target,tuple):
+                for target_idx, t in enumerate(target):
+                    t=t.cpu()
+                    if len(targets) <= target_idx:
+                        targets.append(torch.tensor(t))
+                    else:
+                        targets[target_idx] = torch.cat((targets[target_idx], t))
+            else:
+                target=target.cpu()
+                if isinstance(target, torch.Tensor):
+                    targets = target.clone().detach()
+                else:
+                    targets = torch.tensor(target)
             
             metrics_results = {}
             for metric in self.metrics['train']['batch']:
@@ -497,13 +554,11 @@ class Solver(object):
 
             if self.args.progress_bar:
                 progress_bar(batch_num, len(self.train_loader))
-            if self.args.scheduler.name == "OneCycleLR":
-                self.scheduler.step()
 
-        return torch.stack(predictions), torch.stack(targets)
+        return predictions, targets
 
-    def test(self):
-        print("test:")
+    def val(self):
+        print("val:")
         self.model.eval()
         total_loss = 0
         correct = 0
@@ -512,7 +567,7 @@ class Solver(object):
         predictions = []
         targets = []
         with torch.no_grad():
-            for batch_num, (data, target) in enumerate(self.test_loader):
+            for batch_num, (data, target) in enumerate(self.val_loader):
                 if isinstance(data,list):
                     data = [i.to(self.device) for i in data]
                 else:
@@ -524,24 +579,54 @@ class Solver(object):
 
                 with autocast(enabled=self.args.half):
                     output = self.model(data)
-                    if self.test_output_transform is not None:
-                        output = self.test_output_transform(output)
-                    loss = self.criterion(output, target)
+                    if self.output_transformations is not None:
+                        output = self.output_transformations(output)
+                        
+                    if hasattr(self.args.model, 'returns_loss') and self.args.model.returns_loss:
+                        loss = output
+                    else:
+                        loss = self.criterion(output, target)
 
-                predictions.extend(output)
-                targets.extend(target)
+
+                if isinstance(output,list) or isinstance(output,tuple):
+                    for pred_idx, o in enumerate(output):
+                        o=o.cpu()
+                        if len(predictions) <= pred_idx:
+                            predictions.append(torch.tensor(o))
+                        else:
+                            predictions[pred_idx] = torch.cat((predictions[pred_idx], o))
+                else:
+                    output=output.cpu()
+                    if isinstance(output, torch.Tensor):
+                        predictions = output
+                    else:
+                        predictions = torch.tensor(output)
+
+                if isinstance(target,list) or isinstance(target,tuple):
+                    for target_idx, t in enumerate(target):
+                        t=t.cpu()
+                        if len(targets) <= target_idx:
+                            targets.append(torch.tensor(t))
+                        else:
+                            targets[target_idx] = torch.cat((targets[target_idx], t))
+                else:
+                    target=target.cpu()
+                    if isinstance(target, torch.Tensor):
+                        targets = target
+                    else:
+                        targets = torch.tensor(target)
 
                 metrics_results = {}
-                for metric in self.metrics['test']['batch']:
-                    metrics_results["Test/Batch-"+metric.name] = metric.calculate(output, target, level='batch')
+                for metric in self.metrics['val']['batch']:
+                    metrics_results["Val/Batch-"+metric.name] = metric.calculate(output, target, level='batch')
 
 
-                print_metrics(self.writer, metrics_results, self.get_test_batch_plot_idx())
+                print_metrics(self.writer, metrics_results, self.get_val_batch_plot_idx())
 
                 if self.args.progress_bar:
-                    progress_bar(batch_num, len(self.test_loader))
+                    progress_bar(batch_num, len(self.val_loader))
 
-        return torch.stack(predictions), torch.stack(targets)
+        return predictions, targets
 
     def infer(self):
         print("infer:")
@@ -558,13 +643,28 @@ class Solver(object):
 
                 with autocast(enabled=self.args.half):
                     output = self.model(data)
-                    if self.test_output_transform is not None:
-                        output = self.test_output_transform(output)
+                    if self.output_transformations is not None:
+                        output = self.output_transformations(output)
 
-                predictions.extend(output)
+                
+                if isinstance(output,list) or isinstance(output,tuple):
+                    for pred_idx, o in enumerate(output):
+                        o=o.cpu()
+                        if len(predictions) <= pred_idx:
+                            predictions.append(torch.tensor(o))
+                        else:
+                            predictions[pred_idx] = torch.cat((predictions[pred_idx], o))
+                else:
+                    output=output.cpu()
+                    if isinstance(output, torch.Tensor):
+                        predictions = output
+                    else:
+                        predictions = torch.tensor(output)
+        
+                
                 filenames.extend(filename)
 
-        return filenames, torch.stack(predictions)
+        return filenames, predictions
 
 
     def save(self, epoch, metric, tag=None):
@@ -579,7 +679,7 @@ class Solver(object):
     def run(self):
         if self.args.seed is not None:
             reset_seed(self.args.seed)
-        self.load_data()
+        self.init_dataset()
         self.init_model()
         self.init_optimizer()
         self.init_scheduler()
@@ -605,23 +705,32 @@ class Solver(object):
                 predictions, targets = self.train()
                 for metric in self.metrics['train']['epoch']:
                     metric_name = "Train/"+metric.name
-                    metrics_results[metric_name] = metric.calculate(predictions, targets, level='epoch')
+                    result = metric.calculate(predictions, targets, level='epoch')
+                    if type(result) is dict:
+                        for each_key in result.keys():
+                            metrics_results[metric_name+"_{0}".format(each_key)] = result[each_key] 
+                    else:
+                        metrics_results[metric_name] = result
 
-                if self.epoch % self.args.test_every == 0:
-                    predictions, targets = self.test()
-                    for metric in self.metrics['test']['epoch']:
-                        metric_name = "Test/"+metric.name
-                        metrics_results[metric_name] = metric.calculate(predictions, targets, level='epoch')
+                if self.epoch % self.args.val_every == 0:
+                    predictions, targets = self.val()
+                    for metric in self.metrics['val']['epoch']:
+                        metric_name = "Val/"+metric.name
+                        result = metric.calculate(predictions, targets, level='epoch')
+                        if type(result) is dict:
+                            for each_key in result.keys():
+                                metrics_results[metric_name+"_{0}".format(each_key)] = result[each_key] 
+                        else:
+                            metrics_results[metric_name] = result
 
                 for metric in self.metrics['solver']['epoch']:
                     metric_name = "Solver/"+metric.name
                     metrics_results[metric_name] = metric.calculate(solver = self, level='epoch')
 
-
                 print_metrics(self.writer, metrics_results, self.epoch)
 
                 
-                if self.epoch % self.args.test_every == 0:
+                if self.epoch % self.args.val_every == 0:
                     save_best_metric = False
                     if self.args.optimized_metric not in best_metrics:
                         best_metrics[self.args.optimized_metric] = metrics_results[self.args.optimized_metric]
@@ -643,11 +752,11 @@ class Solver(object):
                 if self.args.save_model and epoch % self.args.save_interval == 0:
                     self.save(epoch, 0)
 
-                if self.args.scheduler.name == "MultiStepLR":
+                if self.scheduler_name == "MultiStepLR":
                     self.scheduler.step()
-                elif self.args.scheduler.name == "ReduceLROnPlateau":
+                elif self.scheduler_name == "ReduceLROnPlateau":
                     self.scheduler.step(metrics_results[self.args.scheduler_metric])
-                elif self.args.scheduler.name == "OneCycleLR":
+                elif self.scheduler_name == "OneCycleLR":
                     pass
                 else:
                     self.scheduler.step()
@@ -677,9 +786,9 @@ class Solver(object):
         self.train_batch_plot_idx += 1
         return self.train_batch_plot_idx - 1
 
-    def get_test_batch_plot_idx(self):
-        self.test_batch_plot_idx += 1
-        return self.test_batch_plot_idx - 1
+    def get_val_batch_plot_idx(self):
+        self.val_batch_plot_idx += 1
+        return self.val_batch_plot_idx - 1
 
 
 

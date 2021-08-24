@@ -1,17 +1,15 @@
 # @package scheduler
 
-name: "OneCycleLR"
-parameters:
+OneCycleLR:
   max_lr: ${optimizer.parameters.lr}
   total_steps: 
-  nr_cycle: 8
-  epochs: ${optimizer.epoch//(nr_cycle-1)}
-  steps_per_epoch: 300
+  epochs: ${epochs}
+  steps_per_epoch: 300 #TBD
   pct_start: 0.3
   anneal_strategy: 'cos'
-  cycle_momentum: True
+  cycle_momentum: False
   base_momentum: 0.85
   max_momentum: 0.95
   div_factor: 10.0
-  final_div_factor: 500.0
+  final_div_factor: 1000.0
   last_epoch: -1

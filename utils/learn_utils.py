@@ -89,7 +89,7 @@ def reset_seed(seed):
     WARNING: for full reproducibility of training, torch.backends.cudnn.deterministic = True is also needed!
     """
     torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.benchmark = True
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
     np.random.seed(seed)

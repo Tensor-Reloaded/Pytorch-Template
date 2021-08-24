@@ -1,7 +1,5 @@
 # @package loss
 
-name: "bcewithlogits"
-parameters:
+bcewithlogits:
   class_weights: 
   reduce : 
-  half: ${half}

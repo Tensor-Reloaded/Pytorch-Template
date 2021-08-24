@@ -2,6 +2,7 @@
 # https://github.com/rpmcruz/autoaugment/blob/master/transformations.py
 import random
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 import torchvision.transforms.functional as TF
@@ -14,8 +15,8 @@ def ShearX(img, v):  # [-0.3, 0.3]
     if random.random() > 0.5:
         v = -v
     img = img.unsqueeze(0)
-    grid = F.affine_grid(torch.Tensor([1, v, 0, 0, 1, 0]).view(1, 2, 3), img.size())
-    return F.grid_sample(img, grid).squeeze(0)
+    grid = F.affine_grid(torch.tensor([1, v, 0, 0, 1, 0], device=img.device, dtype=img.dtype).view(1, 2, 3), img.size(), align_corners=False)
+    return F.grid_sample(img, grid, align_corners=False).squeeze(0)
 
 
 def ShearY(img, v):  # [-0.3, 0.3]
@@ -23,8 +24,8 @@ def ShearY(img, v):  # [-0.3, 0.3]
     if random.random() > 0.5:
         v = -v
     img = img.unsqueeze(0)
-    grid = F.affine_grid(torch.Tensor([1, 0, 0, v, 1, 0]).view(1, 2, 3), img.size())
-    return F.grid_sample(img, grid).squeeze(0)
+    grid = F.affine_grid(torch.tensor([1, 0, 0, v, 1, 0], device=img.device, dtype=img.dtype).view(1, 2, 3), img.size(), align_corners=False)
+    return F.grid_sample(img, grid, align_corners=False).squeeze(0)
 
 
 def TranslateX(img, v):  # [-150, 150] => percentage: [-0.45, 0.45]
@@ -33,17 +34,17 @@ def TranslateX(img, v):  # [-150, 150] => percentage: [-0.45, 0.45]
         v = -v
     v = v * img.size(1)
     img = img.unsqueeze(0)
-    grid = F.affine_grid(torch.Tensor([1, 0, v, 0, 1, 0]).view(1, 2, 3), img.size())
-    return F.grid_sample(img, grid).squeeze(0)
+    grid = F.affine_grid(torch.tensor([1, 0, v, 0, 1, 0], device=img.device, dtype=img.dtype).view(1, 2, 3), img.size(), align_corners=False)
+    return F.grid_sample(img, grid, align_corners=False).squeeze(0)
 
 
 def TranslateXabs(img, v):  # [-150, 150] => percentage: [-0.45, 0.45]
-    assert 0 <= v
+    assert 0 <= v <= 150
     if random.random() > 0.5:
         v = -v
     img = img.unsqueeze(0)
-    grid = F.affine_grid(torch.Tensor([1, 0, v, 0, 1, 0]).view(1, 2, 3), img.size())
-    return F.grid_sample(img, grid).squeeze(0)
+    grid = F.affine_grid(torch.tensor([1, 0, v, 0, 1, 0], device=img.device, dtype=img.dtype).view(1, 2, 3), img.size(), align_corners=False)
+    return F.grid_sample(img, grid, align_corners=False).squeeze(0)
 
 
 def TranslateY(img, v):  # [-150, 150] => percentage: [-0.45, 0.45]
@@ -52,17 +53,17 @@ def TranslateY(img, v):  # [-150, 150] => percentage: [-0.45, 0.45]
         v = -v
     v = v * img.size(2)
     img = img.unsqueeze(0)
-    grid = F.affine_grid(torch.Tensor([1, 0, 0, 0, 1, v]).view(1, 2, 3), img.size())
-    return F.grid_sample(img, grid).squeeze(0)
+    grid = F.affine_grid(torch.tensor([1, 0, 0, 0, 1, v], device=img.device, dtype=img.dtype).view(1, 2, 3), img.size(), align_corners=False)
+    return F.grid_sample(img, grid, align_corners=False).squeeze(0)
 
 
 def TranslateYabs(img, v):  # [-150, 150] => percentage: [-0.45, 0.45]
-    assert 0 <= v
+    assert 0 <= v <= 150
     if random.random() > 0.5:
         v = -v
     img = img.unsqueeze(0)
-    grid = F.affine_grid(torch.Tensor([1, 0, 0, 0, 1, v]).view(1, 2, 3), img.size())
-    return F.grid_sample(img, grid).squeeze(0)
+    grid = F.affine_grid(torch.tensor([1, 0, 0, 0, 1, v], device=img.device, dtype=img.dtype).view(1, 2, 3), img.size(), align_corners=False)
+    return F.grid_sample(img, grid, align_corners=False).squeeze(0)
 
 
 def Rotate(img, v):  # [-30, 30]
@@ -236,8 +237,8 @@ def augment_list():  # 16 oeprations and their ranges
         (ShearY, 0., 0.3),
         (TranslateX, 0., 0.33),  # 2
         (TranslateY, 0., 0.33),  # 3
-        (TranslateXabs, 0., 100),
-        (TranslateYabs, 0., 100),
+        (TranslateXabs, 0., 150.0), 
+        (TranslateYabs, 0., 150.0),
     ]
 
     return augment
@@ -256,7 +257,8 @@ class RandAugment:
             m = self.m
             if self.std > 0.0:
                 m = random.gauss(self.m, self.std)
-            val = (float(self.m) / 30) * float(maxval - minval) + minval
+            val = (float(m) / 30.0) * float(maxval - minval) + minval
+            val = np.clip(val, minval, maxval)
             if op in [ShearX, ShearY, TranslateX, TranslateY, TranslateXabs, TranslateYabs]:
                 if len(img.shape) == 4:
                     for idx in range(img.size(1)):

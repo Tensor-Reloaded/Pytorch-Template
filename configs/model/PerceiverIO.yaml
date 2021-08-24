@@ -1,0 +1,17 @@
+# @package model
+
+name: PerceiverIO
+parameters:
+  depth: 6
+  dim: 29
+  domains: {'naturalimages': {'num_latents':128,'fourier_encode_data':True, 'num_freq_bands':6,'max_freq':10.0,'freq_base':2,'input_channels':3,'input_axis':2}}
+  tasks: {'naturalimage_classification': {'num_queries':128, 'queries_dim':32}}
+  datasets: {'cifar10': {'num_classes':10, 'task':'naturalimage_classification'}}
+  contexts: [['naturalimages','naturalimage_classification','cifar10']]
+  latent_dim: 256
+  cross_heads: 1
+  latent_heads: 8
+  cross_dim_head: 64
+  latent_dim_head: 64
+  weight_tie_layers: False
+  self_per_cross_attn: 1

@@ -10,14 +10,13 @@ parameters:
   initial_accumulator: 0.000001
   weight_decay: 0.001
 
-max_norm: 1.0
+max_norm: 0.0
 grad_penalty: 0.0
-
 batch_replay: False
 
-use_lookahead: True
-lookahead_k: 8
+use_lookahead: False
+lookahead_k: 5
 lookahead_alpha: 0.5
 
 use_SAM: False
-SAM_rho: 0.05
+SAM_rho: 0.5

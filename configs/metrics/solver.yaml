@@ -1,0 +1,12 @@
+# @package metrics
+
+"Model Norm":
+  parameters:
+    norm_type: 2
+  aggregator:
+  levels: ['epoch']
+
+"Learning Rate":
+  parameters:
+  aggregator:
+  levels: ['epoch']

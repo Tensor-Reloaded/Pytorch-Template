@@ -1,7 +1,6 @@
 # @package scheduler
 
-name: "ReduceLROnPlateau"
-parameters:
+ReduceLROnPlateau:
   factor: 0.5
   patience: 30
   min_lr: 0.0000001

@@ -1,23 +1,22 @@
 defaults:
-  - hydra/launcher: basic
-  - hydra/sweeper: basic   # nevergrad | basic
   - common: default
-  - dataset: cifar10 #cifar10 #ImageNet2012
-  - hyperparameters:  # leave empty for basic sweeper
-    optional: true
+  - dataset/train@train_dataset: cifar10
+  - dataset/val@val_dataset: cifar10
+  - optional hyperparameters: 
   - initializer: default
-  - loss: bcewithlogits
-  - metrics: default
-  - model: PreResNet56
-  - optimizer: radam
-  - scheduler: milestones
-  - specific: baseline
-  - transformations: cifar10
-  - dataset_model_specific: ${defaults.1.dataset}/${defaults.9.specific}/${defaults.6.model}
-    optional: true
+  - loss: crossentropyloss
+  - metrics@train_metrics: [acc_ce] 
+  - metrics@val_metrics: [acc_ce] 
+  - metrics@solver_metrics: [solver] 
+  - model: PerceiverIO
+  - optimizer: radam 
+  - scheduler: onecycle
+  - override hydra/sweeper: basic   # nevergrad | basic
+  - override hydra/launcher: basic
 
-storage_dir: "\\\\CRISTIAN-HOME\\Data"
-save_dir: "${dataset.name}/${model.name}/${aux_save_dir}/${seed}"
+aux_save_dir: 'baseline'
+storage_dir: "${oc.env:TENSOR_RELOADED_DATADIR}"
+save_dir: "${train_dataset.name}/${model.name}/${aux_save_dir}/${seed}"
 
 load_model: ""
 

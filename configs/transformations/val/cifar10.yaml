@@ -1,0 +1,13 @@
+# @package transformations
+
+ImageToTensor:
+  apply_to: 'input'
+
+OneHot:
+  num_classes: 10
+  apply_to: 'target'
+
+ImageNormalize:
+  mean: [0.491, 0.482, 0.446]
+  std: [0.247, 0.243, 0.261]
+  apply_to: 'input'

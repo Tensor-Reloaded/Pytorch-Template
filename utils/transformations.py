@@ -3,13 +3,39 @@ import math
 import torch
 import torch.nn.functional as F
 import torchvision.transforms.functional as TF
+import albumentations.augmentations.transforms as ATF
+
 from torch.nn.functional import conv2d
 from torchvision import transforms as transforms
 
+from scipy.fftpack import dct, idct
+
+import numpy as np
+import skimage.morphology
+from skimage.morphology import disk
+import cv2 as cv
+
 from .randaugment import RandAugment
 
+class TransformWrapper(object):
+    def __init__(self, transform, apply_to=None):
+        self.transform = transform
+        self.apply_to = apply_to
 
-class Lighting(object):
+    def __call__(self, data):
+        if self.apply_to is None:
+            return self.transform(data)
+        else:
+            if self.apply_to == 'input':
+                return self.transform(data[0]), data[1]
+            elif self.apply_to == 'target':
+                return data[0], self.transform(data[1])
+            else:
+                raise ValueError("apply_to must be 'input' or 'target'")
+
+
+
+class LightingNoise(object):
     """Lighting noise(AlexNet - style PCA - based noise)"""
 
     def __init__(self, alphastd, eigval, eigvec):
@@ -38,10 +64,8 @@ class OneHot(object):
         self.device = 'cuda'
 
     def __call__(self, x):
-        x = torch.LongTensor([x]).long().view(-1, 1).to(self.device)
-        return torch.full((x.size(0), self.num_classes), self.off_value, device=self.device).scatter_(1, x,
-                                                                                                      self.on_value).squeeze(
-            0)
+        x = torch.LongTensor([x]).long().view(-1, 1)
+        return torch.full((x.size(0), self.num_classes), self.off_value).scatter_(1, x, self.on_value).squeeze(0)
 
 
 class LambdaTransform(object):
@@ -58,255 +82,12 @@ class Resize(object):
         self.interpolation = interpolation
 
     def __call__(self, data):
+        if isinstance(data, np.ndarray):
+            return cv.resize(data, dsize=self.size)
+
         return torch.nn.functional.interpolate(data.unsqueeze(0), size=self.size, scale_factor=None,
                                                mode=self.interpolation, align_corners=None,
                                                recompute_scale_factor=None).squeeze(0)
-
-
-class ShearX(object):
-    def __init__(self):
-        pass
-
-    def __call__(self, img, v=0.1):
-        assert -0.3 <= v <= 0.3
-        if random.random() > 0.5:
-            v = -v
-        img = img.unsqueeze(0)
-        grid = F.affine_grid(torch.Tensor([1, v, 0, 0, 1, 0]).view(1, 2, 3), img.size())
-        return F.grid_sample(img, grid).squeeze(0)
-
-
-class ShearY(object):
-    def __init__(self):
-        pass
-
-    def __call__(self, img, v=0.1):
-        assert -0.3 <= v <= 0.3
-        if random.random() > 0.5:
-            v = -v
-        img = img.unsqueeze(0)
-        grid = F.affine_grid(torch.Tensor([1, 0, 0, v, 1, 0]).view(1, 2, 3), img.size())
-        return F.grid_sample(img, grid).squeeze(0)
-
-
-class TranslateX(object):
-    def __init__(self):
-        pass
-
-    def __call__(self, img, v=0.1):
-        assert -0.45 <= v <= 0.45
-        if random.random() > 0.5:
-            v = -v
-        v = v * img.size(1)
-        img = img.unsqueeze(0)
-        grid = F.affine_grid(torch.Tensor([1, 0, v, 0, 1, 0]).view(1, 2, 3), img.size())
-        return F.grid_sample(img, grid).squeeze(0)
-
-
-class TranslateXabs(object):
-    def __init__(self):
-        pass
-
-    def __call__(self, img, v=0.1):
-        assert 0 <= v
-        if random.random() > 0.5:
-            v = -v
-        img = img.unsqueeze(0)
-        grid = F.affine_grid(torch.Tensor([1, 0, v, 0, 1, 0]).view(1, 2, 3), img.size())
-        return F.grid_sample(img, grid).squeeze(0)
-
-
-class TranslateY(object):
-    def __init__(self):
-        pass
-
-    def __call__(self, img, v=0.1):
-        assert -0.45 <= v <= 0.45
-        if random.random() > 0.5:
-            v = -v
-        v = v * img.size(2)
-        img = img.unsqueeze(0)
-        grid = F.affine_grid(torch.Tensor([1, 0, 0, 0, 1, v]).view(1, 2, 3), img.size())
-        return F.grid_sample(img, grid).squeeze(0)
-
-
-class TranslateYabs(object):
-    def __init__(self):
-        pass
-
-    def __call__(self, img, v=0.1):
-        assert 0 <= v
-        if random.random() > 0.5:
-            v = -v
-        img = img.unsqueeze(0)
-        grid = F.affine_grid(torch.Tensor([1, 0, 0, 0, 1, v]).view(1, 2, 3), img.size())
-        return F.grid_sample(img, grid).squeeze(0)
-
-
-class Autocontrast(object):
-    def __init__(self):
-        pass
-
-    def __call__(self, img):
-        bound = 1.0 if img.is_floating_point() else 255.0
-        dtype = img.dtype if torch.is_floating_point(img) else torch.float32
-
-        minimum = img.amin(dim=(-2, -1), keepdim=True).to(dtype)
-        maximum = img.amax(dim=(-2, -1), keepdim=True).to(dtype)
-        eq_idxs = torch.where(minimum == maximum)[0]
-        minimum[eq_idxs] = 0
-        maximum[eq_idxs] = bound
-        scale = bound / (maximum - minimum)
-
-        return ((img - minimum) * scale).clamp(0, bound).to(img.dtype)
-
-
-class Rotate(object):
-    def __init__(self):
-        pass
-
-    def __call__(self, img, v=10):
-        assert -30 <= v <= 30
-        if random.random() > 0.5:
-            v = -v
-        return TF.rotate(img, v)
-
-
-class Invert(object):
-    def __init__(self):
-        pass
-
-    def __call__(self, img):
-        bound = torch.tensor(1 if img.is_floating_point() else 255, dtype=img.dtype, device=img.device)
-        return bound - img
-
-
-class Solarize(object):
-    def __init__(self):
-        pass
-
-    def __call__(self, img, v=0.1):
-        assert 0 <= v <= 1
-        bound = torch.tensor(1 if img.is_floating_point() else 255, dtype=img.dtype, device=img.device)
-        inverted_img = bound - img
-        return torch.where(img >= v, inverted_img, img)
-
-
-class Equalize(object):
-    def __init__(self):
-        pass
-
-    @staticmethod
-    def _scale_channel(img_chan):
-        img_chan = img_chan * 255.0
-
-        hist = torch.histc(img_chan.to(torch.float32), bins=256, min=0, max=255)
-
-        nonzero_hist = hist[hist != 0]
-        step = torch.div(nonzero_hist[:-1].sum(), 255, rounding_mode='floor')
-        if step == 0:
-            return img_chan
-
-        lut = torch.div(
-            torch.cumsum(hist, 0) + torch.div(step, 2, rounding_mode='floor'),
-            step, rounding_mode='floor')
-        lut = torch.nn.functional.pad(lut, [1, 0])[:-1].clamp(0, 255)
-
-        return lut[img_chan.to(torch.int64)]
-
-    def __call__(self, img):
-        return torch.stack([self._scale_channel(img[c]) / 255.0 for c in range(img.size(0))])
-
-
-class Flip(object):
-    def __init__(self):
-        pass
-
-    def __call__(self, img):
-        return img.flip(-1)
-
-
-class SolarizeAdd(object):
-    def __init__(self):
-        pass
-
-    def __call__(self, img, v=0.1, threshold=0.5):
-        img = img + (v / 255.0)
-        img = torch.clip(img, 0, 1)
-
-        bound = torch.tensor(1 if img.is_floating_point() else 255, dtype=img.dtype, device=img.device)
-        inverted_img = bound - img
-        return torch.where(img >= threshold, inverted_img, img)
-
-
-def _blend(img1, img2, ratio):
-    ratio = float(ratio)
-    bound = 1.0 if img1.is_floating_point() else 255.0
-    return (ratio * img1 + (1.0 - ratio) * img2).clamp(0, bound).to(img1.dtype)
-
-
-class Brightness(object):
-    def __init__(self):
-        pass
-
-    def __call__(self, img, v=0.4):
-        assert 0.1 <= v <= 1.9
-        return _blend(img, torch.zeros_like(img), v)
-
-
-def _cast_squeeze_in(img, req_dtypes):
-    need_squeeze = False
-    # make image NCHW
-    if img.ndim < 4:
-        img = img.unsqueeze(dim=0)
-        need_squeeze = True
-
-    out_dtype = img.dtype
-    need_cast = False
-    if out_dtype not in req_dtypes:
-        need_cast = True
-        req_dtype = req_dtypes[0]
-        img = img.to(req_dtype)
-    return img, need_cast, need_squeeze, out_dtype
-
-
-def _cast_squeeze_out(img, need_cast, need_squeeze, out_dtype):
-    if need_squeeze:
-        img = img.squeeze(dim=0)
-
-    if need_cast:
-        if out_dtype in (torch.uint8, torch.int8, torch.int16, torch.int32, torch.int64):
-            # it is better to round before cast
-            img = torch.round(img)
-        img = img.to(out_dtype)
-  
-    return img
-
-
-def _blurred_degenerate_image(img):
-    dtype = img.dtype if torch.is_floating_point(img) else torch.float32
-
-    kernel = torch.ones((3, 3), dtype=dtype, device=img.device)
-    kernel[1, 1] = 5.0
-    kernel /= kernel.sum()
-    kernel = kernel.expand(img.shape[-3], 1, kernel.shape[0], kernel.shape[1])
-
-    result_tmp, need_cast, need_squeeze, out_dtype = _cast_squeeze_in(img, [kernel.dtype, ])
-    result_tmp = conv2d(result_tmp, kernel, groups=result_tmp.shape[-3])
-    result_tmp = _cast_squeeze_out(result_tmp, need_cast, need_squeeze, out_dtype)
-
-    result = img.clone()
-    result[..., 1:-1, 1:-1] = result_tmp
-
-    return result
-
-
-class Sharpness(object):
-    def __init__(self):
-        pass
-
-    def __call__(self, img, v=0.3):
-        return _blend(img, _blurred_degenerate_image(img), v)
 
 
 class Identity(object):
@@ -351,7 +132,7 @@ class RandomErasing:
 
     def __init__(
             self,
-            probability=0.5, min_area=0.02, max_area=1/3, min_aspect=0.3, max_aspect=None,
+            probability=0.5, min_area=0.02, max_area=0.2, min_aspect=0.3, max_aspect=None,
             mode='const', min_count=1, max_count=None, num_splits=0, device='cuda'):
         self.probability = probability
         self.min_area = min_area
@@ -431,6 +212,7 @@ class RandomErasing:
                 self._erase3D(tensor[i], chan, img_d, img_h, img_w, tensor.dtype)
         return tensor
 
+
 class ImageRandomResizedCrop(object):
     def __init__(self, size, scale):
         if isinstance(size, list):
@@ -442,20 +224,144 @@ class ImageRandomResizedCrop(object):
         return self.fn(tensor)
 
 
+class Unsqueeze(object):
+    def __init__(self, dimension):
+        self.dimension = dimension
+
+    def __call__(self, tensor):
+        return tensor.unsqueeze(self.dimension)
+
+        
+class Squeeze(object):
+    def __init__(self, dimension):
+        self.dimension = dimension
+
+    def __call__(self, tensor):
+        return tensor.squeeze(self.dimension)
+        
+class Half(object):
+    def __init__(self):
+        pass
+    def __call__(self, tensor):
+        return tensor.half()
+
+class TensorType(object):
+    def __init__(self, dtype):
+        self.dtype = dtype
+
+    def __call__(self, tensor):
+        return tensor.type(self.dtype)
+
+class ToTensor(object):
+    def __init__(self):
+        pass
+    def __call__(self, tensor):
+        return torch.tensor(tensor)
+
+class Normalize(object):
+    def __init__(self, maximum=None, minimum=None):
+        self.maximum = maximum
+        self.minimum = minimum
+
+    def __call__(self, tensor):
+        if self.maximum is None:
+            self.maximum = tensor.max()
+        if self.minimum is None:
+            self.minimum = tensor.min()
+        return (tensor - self.minimum) / (self.maximum - self.minimum)
+
+
 transformations = {
-    'ImageNormalize': transforms.Normalize,
-    'ImageRandomCrop': transforms.RandomCrop,
-    'ImageRandomResizedCrop': ImageRandomResizedCrop,
-    'ImageRandomHorizontalFlip': transforms.RandomHorizontalFlip,
-    'ImageToTensor': transforms.ToTensor,
-    'ImageRandomRotation': transforms.RandomRotation,
-    'ImageColorJitter': transforms.ColorJitter,
-    'ImageLighting': Lighting,
-    'ImageResize': transforms.Resize,
-    'ImageCenterCrop': transforms.CenterCrop,
-    'Resize': Resize,
-    'LambdaTransform': LambdaTransform,
-    'OneHot': OneHot,
-    'RandAugment': RandAugment,
-    'RandomErasing': RandomErasing,
+    'ImageNormalize': {
+        'constructor': transforms.Normalize,
+        'cacheable': True,
+    },
+    'ImageRandomCrop': {
+        'constructor': transforms.RandomCrop,
+        'cacheable': False,
+    },
+    'ImageRandomResizedCrop': {
+        'constructor': ImageRandomResizedCrop,
+        'cacheable': False,
+    },
+    'ImageRandomHorizontalFlip': {
+        'constructor': transforms.RandomHorizontalFlip,
+        'cacheable': False,
+    },
+    'ImageToTensor': {
+        'constructor': transforms.ToTensor,
+        'cacheable': True,
+    },
+    'ToTensor': {
+        'constructor': ToTensor,
+        'cacheable': True,
+    },
+    'ImageRandomRotation': {
+        'constructor': transforms.RandomRotation,
+        'cacheable': False,
+    },
+    'ImageColorJitter': {
+        'constructor': transforms.ColorJitter,
+        'cacheable': False,
+    },
+    'ImageLightingNoise': {
+        'constructor': LightingNoise,
+        'cacheable': False,
+    },
+    'ImageResize': {
+        'constructor': transforms.Resize,
+        'cacheable': True,
+    },
+    'ImageCenterCrop': {
+        'constructor': transforms.CenterCrop,
+        'cacheable': True,
+    },
+    'Resize': {
+        'constructor': Resize,
+        'cacheable': True,
+    },
+    'LambdaTransform': {
+        'constructor': LambdaTransform,
+        'cacheable': True,
+    },
+    'OneHot': {
+        'constructor': OneHot,
+        'cacheable': True,
+    },
+    'RandAugment': {
+        'constructor': RandAugment,
+        'cacheable': False,
+    },
+    'RandomErasing': {
+        'constructor': RandomErasing,
+        'cacheable': False,
+    },
+    'Unsqueeze': {
+        'constructor': Unsqueeze,
+        'cacheable': True,
+    },
+    'Squeeze': {
+        'constructor': Squeeze,
+        'cacheable': True,
+    },
+    'Half': {
+        'constructor': Half,
+        'cacheable': True,
+    },
+    'TensorType': {
+        'constructor': TensorType,
+        'cacheable': True,
+    },
+    'Normalize': {
+        'constructor': Normalize,
+        'cacheable': True,
+    },
+    'TensorType': {
+        'constructor': TensorType,
+        'cacheable': True,
+    },
 }
+
+
+if __name__ == '__main__':
+    pass
