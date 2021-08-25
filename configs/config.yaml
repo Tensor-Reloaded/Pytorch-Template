@@ -8,9 +8,9 @@ defaults:
   - metrics@train_metrics: [acc_ce] 
   - metrics@val_metrics: [acc_ce] 
   - metrics@solver_metrics: [solver] 
-  - model: PerceiverIO
+  - model: PreResNet56
   - optimizer: radam 
-  - scheduler: onecycle
+  - scheduler: milestones
   - override hydra/sweeper: basic   # nevergrad | basic
   - override hydra/launcher: basic
 

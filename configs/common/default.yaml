@@ -9,7 +9,7 @@ progress_bar: True
 save_model: True
 save_interval: 10
 
-epochs: 600
+epochs: 300
 val_every: 1
 es_patience: 100000
 es_metric: 'Train/Accuracy'
