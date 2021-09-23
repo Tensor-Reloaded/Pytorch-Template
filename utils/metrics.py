@@ -68,19 +68,30 @@ class F1(object):
 
 
 class Accuracy(object):
-    def __init__(self, class_list = None, weighted = False):
+    def __init__(self, class_list = None, weighted = False, multilabel = False):
         self.class_list = class_list
         self.weighted = weighted
+        self.multilabel = multilabel
 
     def __call__(self, preds_i, target):
-        preds = F.one_hot(preds_i.argmax(-1), target.shape[-1])
-        pos_pred, neg_pred = preds == 1, preds == 0
-        true_pred, false_pred = target == preds, target != preds
-        tp = (true_pred * pos_pred).sum(dim=0)
-        fp = (false_pred * pos_pred).sum(dim=0)
-    
-        tn = (true_pred * neg_pred).sum(dim=0)
-        fn = (false_pred * neg_pred).sum(dim=0)
+        if self.multilabel:
+            preds = F.one_hot(preds_i.argmax(-1), target.shape[-1])
+            pos_pred, neg_pred = preds == 1, preds == 0
+            true_pred, false_pred = target == preds, target != preds
+            tp = (true_pred * pos_pred).sum(dim=0)
+            fp = (false_pred * pos_pred).sum(dim=0)
+        
+            tn = (true_pred * neg_pred).sum(dim=0)
+            fn = (false_pred * neg_pred).sum(dim=0)
+        else:
+            preds = preds_i.argmax(-1)
+            target = target.argmax(-1)
+            true_pred, false_pred = target == preds, target != preds
+            tp = (true_pred * true_pred).sum(dim=0)
+            fp = (false_pred * true_pred).sum(dim=0)
+            tn = (true_pred * false_pred).sum(dim=0)
+            fn = (false_pred * false_pred).sum(dim=0)
+            
         if self.weighted:
             return ((tp + tn) / ( tp + tn + fp + fn )).nan_to_num(0.0).mean()
         if self.class_list == None:
@@ -197,7 +208,7 @@ metrics = {
     'Identity':{
         'constructor': Identity,
         'higher_is_better': False
-    }
+    },
 }
 
 metrics = metrics | losses
