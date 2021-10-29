@@ -3,11 +3,8 @@ numpy #==1.20.1
 omegaconf #==2.0.6
 tensorboard #==2.4.1
 
-torch==1.9.0+cu111 --find-links https://download.pytorch.org/whl/torch_stable.html
-torchvision==0.10.0+cu111 --find-links https://download.pytorch.org/whl/torch_stable.html
-torchaudio --find-links https://download.pytorch.org/whl/torch_stable.html
-torchtext --find-links https://download.pytorch.org/whl/torch_stable.html
-pystiche --find-links https://download.pytorch.org/whl/torch_stable.html
+torch==1.10.0+cu113 --find-links https://download.pytorch.org/whl/cu113/torch_stable.html
+torchvision==0.11.1+cu113 --find-links https://download.pytorch.org/whl/cu113/torch_stable.html
 torch_optimizer #==0.1.0
 albumentations
 
