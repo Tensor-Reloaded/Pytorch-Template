@@ -1,6 +1,8 @@
 import sys
 import time
 import os
+import subprocess
+import zipfile
 
 TOTAL_BAR_LENGTH = 80
 LAST_T = time.time()
@@ -91,3 +93,16 @@ def format_time(seconds):
     if f == '':
         f = '0ms'
     return f
+
+def save_current_code(path: str):
+    print(f"Saving current code to {path}")
+    files_in_repo = subprocess.run(['git', 'ls-tree', '--full-tree', '-r', '--name-only', 'HEAD'],
+                                   stdout=subprocess.PIPE).stdout.decode("utf-8").split("\n")
+    root = subprocess.run(['git', 'rev-parse', '--show-toplevel'], stdout=subprocess.PIPE).stdout.decode(
+        "utf-8").rstrip('\n')
+    with zipfile.ZipFile(os.path.join(path, "files.zip"), "w", zipfile.ZIP_DEFLATED) as z:
+        for file in files_in_repo:
+            file_path = os.path.join(root, file)
+            if os.path.isfile(file_path):
+                print(file)
+                z.write(file_path, file)
