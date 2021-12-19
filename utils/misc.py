@@ -1,8 +1,9 @@
 import sys
 import time
 import os
-import subprocess
+import pathlib
 import zipfile
+from hydra.core.hydra_config import HydraConfig
 
 TOTAL_BAR_LENGTH = 80
 LAST_T = time.time()
@@ -96,13 +97,9 @@ def format_time(seconds):
 
 def save_current_code(path: str):
     print(f"Saving current code to {path}")
-    files_in_repo = subprocess.run(['git', 'ls-tree', '--full-tree', '-r', '--name-only', 'HEAD'],
-                                   stdout=subprocess.PIPE).stdout.decode("utf-8").split("\n")
-    root = subprocess.run(['git', 'rev-parse', '--show-toplevel'], stdout=subprocess.PIPE).stdout.decode(
-        "utf-8").rstrip('\n')
+    root = HydraConfig.get().runtime.cwd
     with zipfile.ZipFile(os.path.join(path, "files.zip"), "w", zipfile.ZIP_DEFLATED) as z:
-        for file in files_in_repo:
-            file_path = os.path.join(root, file)
-            if os.path.isfile(file_path):
-                print(file)
+        for file_path in pathlib.Path(root).glob('**/*.py'):
+            file = str(file_path).replace(root, "").lstrip(os.path.sep)
+            if not file.startswith(f"venv{os.path.sep}"):
                 z.write(file_path, file)
