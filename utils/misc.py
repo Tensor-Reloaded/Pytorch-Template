@@ -97,9 +97,16 @@ def format_time(seconds):
 
 def save_current_code(path: str):
     print(f"Saving current code to {path}")
-    root = HydraConfig.get().runtime.cwd
+    project_root = HydraConfig.get().runtime.cwd
+    unwanted_dirs = ["venv", f"utils{os.path.sep}__pycache__",
+                     "outputs", "results", ".idea", ".git", "runs", f"models{os.path.sep}__pycache__", "data"]
+    unwanted_extensions = ["", "txt", "md"]
     with zipfile.ZipFile(os.path.join(path, "files.zip"), "w", zipfile.ZIP_DEFLATED) as z:
-        for file_path in pathlib.Path(root).glob('**/*.py'):
-            file = str(file_path).replace(root, "").lstrip(os.path.sep)
-            if not file.startswith(f"venv{os.path.sep}"):
-                z.write(file_path, file)
+        for root, dirs, files in os.walk(project_root):
+            root = root.replace(project_root, "").lstrip(os.path.sep)
+            if True in [root.startswith(x) for x in unwanted_dirs]:
+                continue
+            for file in files:
+                if True in [file.split(".")[-1] in unwanted_extensions]:
+                    continue
+                z.write(os.path.join(project_root, root, file), os.path.join(root, file))
