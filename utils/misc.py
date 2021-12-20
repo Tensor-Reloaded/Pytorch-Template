@@ -107,6 +107,6 @@ def save_current_code(path: str):
             if True in [root.startswith(x) for x in unwanted_dirs]:
                 continue
             for file in files:
-                if True in [file.split(".")[-1] in unwanted_extensions]:
+                if file.split(".")[-1] in unwanted_extensions:
                     continue
                 z.write(os.path.join(project_root, root, file), os.path.join(root, file))
