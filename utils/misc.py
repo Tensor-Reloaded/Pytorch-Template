@@ -1,6 +1,9 @@
 import sys
 import time
 import os
+import pathlib
+import zipfile
+from hydra.core.hydra_config import HydraConfig
 
 TOTAL_BAR_LENGTH = 80
 LAST_T = time.time()
@@ -91,3 +94,19 @@ def format_time(seconds):
     if f == '':
         f = '0ms'
     return f
+
+def save_current_code(path: str):
+    print(f"Saving current code to {path}")
+    project_root = HydraConfig.get().runtime.cwd
+    unwanted_dirs = ["venv", f"utils{os.path.sep}__pycache__",
+                     "outputs", "results", ".idea", ".git", "runs", f"models{os.path.sep}__pycache__", "data"]
+    unwanted_extensions = ["", "txt", "md"]
+    with zipfile.ZipFile(os.path.join(path, "files.zip"), "w", zipfile.ZIP_DEFLATED) as z:
+        for root, dirs, files in os.walk(project_root):
+            root = root.replace(project_root, "").lstrip(os.path.sep)
+            if True in [root.startswith(x) for x in unwanted_dirs]:
+                continue
+            for file in files:
+                if file.split(".")[-1] in unwanted_extensions:
+                    continue
+                z.write(os.path.join(project_root, root, file), os.path.join(root, file))

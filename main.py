@@ -29,7 +29,7 @@ from omegaconf import DictConfig, OmegaConf
 from sklearn.metrics import cohen_kappa_score
 
 from utils import *
-from utils.misc import progress_bar
+from utils.misc import progress_bar, save_current_code
 import models
 
 
@@ -46,6 +46,7 @@ def main(config: DictConfig):
     os.makedirs(save_config_path, exist_ok=True)
     with open(os.path.join(save_config_path, "README.md"), 'w+') as f:
         f.write(OmegaConf.to_yaml(config, resolve=True))
+    save_current_code(save_config_path)
 
     solver = Solver(config)
     return solver.run()
