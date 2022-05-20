@@ -9,7 +9,6 @@ from multiprocessing import Process, freeze_support
 from shutil import copyfile
 import pandas as pd
 
-from inspect import signature
 from functools import partial
 import numpy as np
 from collections import OrderedDict
@@ -517,9 +516,6 @@ class Solver(object):
 
             if self.train_batch_plot_idx % self.args.train_dataset.update_every == 0:
                 step_partial_func = partial(self.scaler.step)
-                if "metric" in [param.name for param in signature(self.optimizer.step).parameters.values()]:
-                    step_partial_func = partial(step_partial_func, metric=metric)
-                    # step_partial_func = partial(self.scaler.step, metric=None)
 
                 if hasattr(self.args.optimizer, "use_SAM") and self.args.optimizer.use_SAM:
                     step_partial_func = partial(step_partial_func, closure=sam_closure)
