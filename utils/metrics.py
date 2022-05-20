@@ -4,10 +4,10 @@ import torch.nn.functional as F
 import numpy as np
 from torch import nn
 from .losses import losses
-from sklearn.metrics import cohen_kappa_score
 
-class Metric():
-    def __init__(self, name, metric_func, index=None, solver_metric = False, aggregator = None):
+
+class Metric:
+    def __init__(self, name, metric_func, index=None, solver_metric=False, aggregator=None):
         self.name = name
         self.metric_func = metric_func
         self.solver_metric = solver_metric
@@ -15,8 +15,8 @@ class Metric():
         self.index = index
 
         self.batch_accumulator = []
-    
-    def calculate(self, prediction=None, target=None, solver=None, level = 'epoch'):
+
+    def calculate(self, prediction=None, target=None, solver=None, level='epoch'):
         if self.index is not None:
             prediction = prediction[self.index]
             target = target[self.index]
@@ -24,7 +24,7 @@ class Metric():
             result = self.metric_func(solver)
         else:
             result = self.metric_func(prediction, target)
-        
+
         if self.aggregator is not None:
             self.batch_accumulator.append(result)
 
@@ -37,9 +37,9 @@ class Metric():
                 for i in range(len(target_list)):
                     aux = torch.Tensor(target_list[i])
                     if self.aggregator == 'mean':
-                        result[self.metric_func.class_list[i]] = torch.mean(aux) 
+                        result[self.metric_func.class_list[i]] = torch.mean(aux)
                     elif self.aggregator == 'sum':
-                        result[self.metric_func.class_list[i]] = torch.sum(aux) 
+                        result[self.metric_func.class_list[i]] = torch.sum(aux)
 
             else:
                 self.batch_accumulator = torch.Tensor(self.batch_accumulator)
@@ -51,8 +51,9 @@ class Metric():
             self.batch_accumulator = []
             return result
 
+
 class F1(object):
-    def __init__(self, class_list = None, weighted = False):
+    def __init__(self, class_list=None, weighted=False):
         self.class_list = class_list
         self.weighted = weighted
         self.precision_func = Precision(class_list, weighted)
@@ -61,14 +62,14 @@ class F1(object):
     def __call__(self, preds_i, target):
         precision = self.precision_func(preds_i, target)
         recall = self.recall_func(preds_i, target)
-        if self.class_list == None:
+        if self.class_list is None:
             return 2 * ((precision * recall) / (precision + recall))
         else:
             return {i: 2 * ((precision[i] * recall[i]) / (precision[i] + recall[i])) for i in self.class_list}
 
 
 class Accuracy(object):
-    def __init__(self, class_list = None, weighted = False, multilabel = False):
+    def __init__(self, class_list=None, weighted=False, multilabel=False):
         self.class_list = class_list
         self.weighted = weighted
         self.multilabel = multilabel
@@ -80,34 +81,34 @@ class Accuracy(object):
             true_pred, false_pred = target == preds, target != preds
             tp = (true_pred * pos_pred).sum(dim=0)
             fp = (false_pred * pos_pred).sum(dim=0)
-        
+
             tn = (true_pred * neg_pred).sum(dim=0)
             fn = (false_pred * neg_pred).sum(dim=0)
         else:
             preds = preds_i.argmax(-1)
             target = target.argmax(-1)
-            true_pred, false_pred = target == preds, target != preds
+            true_pred, false_pred = (target == preds, target != preds)
             tp = (true_pred * true_pred).sum(dim=0)
             fp = (false_pred * true_pred).sum(dim=0)
             tn = (true_pred * false_pred).sum(dim=0)
             fn = (false_pred * false_pred).sum(dim=0)
-            
+
         if self.weighted:
-            return ((tp + tn) / ( tp + tn + fp + fn )).nan_to_num(0.0).mean()
-        if self.class_list == None:
+            return ((tp + tn) / (tp + tn + fp + fn)).nan_to_num(0.0).mean()
+        if self.class_list is None:
             tp = tp.sum()
             fp = fp.sum()
             tn = tn.sum()
             fn = fn.sum()
-            return ((tp + tn) / ( tp + tn + fp + fn )).nan_to_num(0.0)
+            return ((tp + tn) / (tp + tn + fp + fn)).nan_to_num(0.0)
         else:
-            values = ((tp + tn) / ( tp + tn + fp + fn )).nan_to_num(0.0)
+            values = ((tp + tn) / (tp + tn + fp + fn)).nan_to_num(0.0)
 
-            return {self.class_list[i]:values[i] for i in range(len(self.class_list))}
+            return {self.class_list[i]: values[i] for i in range(len(self.class_list))}
 
 
 class Precision(object):
-    def __init__(self, class_list = None, weighted = False):
+    def __init__(self, class_list=None, weighted=False):
         self.class_list = class_list
         self.weighted = weighted
 
@@ -120,16 +121,17 @@ class Precision(object):
         fp = (false_pred * pos_pred).sum(dim=0)
         if self.weighted:
             return (tp / (tp + fp)).nan_to_num(0.0).mean()
-        if self.class_list == None:
+        if self.class_list is None:
             tp = tp.sum()
-            fp = fp.sum() 
+            fp = fp.sum()
             return (tp / (tp + fp)).nan_to_num(0.0)
         else:
             values = (tp / (tp + fp)).nan_to_num(0.0)
-            return {self.class_list[i]:values[i] for i in range(len(self.class_list))}
+            return {self.class_list[i]: values[i] for i in range(len(self.class_list))}
+
 
 class Recall(object):
-    def __init__(self, class_list = None, weighted = False):
+    def __init__(self, class_list=None, weighted=False):
         self.class_list = class_list
         self.weighted = weighted
 
@@ -141,16 +143,16 @@ class Recall(object):
 
         tp = (true_pred * pos_pred).sum(dim=0)
         fn = (false_pred * neg_pred).sum(dim=0)
-    
+
         if self.weighted:
             return (tp / (tp + fn)).nan_to_num(0.0).mean()
-        if self.class_list == None:
+        if self.class_list is None:
             tp = tp.sum()
             fn = fn.sum()
             return (tp / (tp + fn)).nan_to_num(0.0)
         else:
             values = tp / (tp + fn).nan_to_num(0.0)
-            return {self.class_list[i]:values[i] for i in range(len(self.class_list))}
+            return {self.class_list[i]: values[i] for i in range(len(self.class_list))}
 
 
 class Identity(object):
@@ -159,6 +161,7 @@ class Identity(object):
 
     def __call__(self, preds_i, target):
         return preds_i
+
 
 class Model_Norm(object):
     def __init__(self, norm_type=2):
@@ -169,6 +172,7 @@ class Model_Norm(object):
         for param in solver.model.parameters():
             norm += torch.norm(input=param, p=self.norm_type, dtype=torch.float)
         return norm
+
 
 class Learning_Rate(object):
     def __init__(self):

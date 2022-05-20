@@ -10,8 +10,6 @@ import json
 import hydra
 from omegaconf import DictConfig, OmegaConf
 
-import nibabel as nb
-
 from skimage import io
 from skimage import transform
 from skimage.morphology import binary_erosion
@@ -23,9 +21,6 @@ import numpy as np
 import torch
 import torchvision
 from torch.utils.data import Dataset
-
-import pydicom
-from pydicom.pixel_data_handlers.util import apply_voi_lut
 
 
 CIFAR_10_CLASSES = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
@@ -53,6 +48,7 @@ datasets = {
     'CIFAR-10': torchvision.datasets.CIFAR10,
     'CIFAR-100': torchvision.datasets.CIFAR100,
     'ImageNet2012': torchvision.datasets.ImageFolder,
+    'MNIST': torchvision.datasets.MNIST,
 }
 
 

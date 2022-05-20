@@ -1,0 +1,20 @@
+# @package transformations
+
+ImageToTensor:
+  apply_to: 'input'
+
+ImageNormalize:
+  mean: [0.1307]
+  std: [0.3081]
+  apply_to: 'input'
+
+LambdaTransform:
+  lambda_string: 'X.view(params)'
+  params: -1
+  apply_to: 'input'
+
+
+OneHot:
+  num_classes: 10
+  apply_to: 'target'
+

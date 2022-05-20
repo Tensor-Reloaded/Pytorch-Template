@@ -1,26 +1,25 @@
-hydra-core #>=1.1.0
-numpy #==1.20.1
-omegaconf #==2.0.6
-tensorboard #==2.4.1
 
-torch==1.10.0+cu113 --find-links https://download.pytorch.org/whl/cu113/torch_stable.html
-torchvision==0.11.1+cu113 --find-links https://download.pytorch.org/whl/cu113/torch_stable.html
-torch_optimizer #==0.1.0
-albumentations
+torch==1.10.1+cu113 --find-links https://download.pytorch.org/whl/cu113/torch_stable.html
+torchvision==0.11.2+cu113 --find-links https://download.pytorch.org/whl/cu113/torch_stable.html
+torchaudio===0.10.1+cu113 --find-links https://download.pytorch.org/whl/cu113/torch_stable.html
 
-scikit-learn #==0.24.1
-scikit-image #==0.18.1
-nibabel #==3.2.1
-imageio #==2.9.0
-einops #==0.3.0
-timm #==0.4.5
-seaborn #==0.11.1
-pandas #~=1.2.4
-matplotlib #~=3.4.1
-scipy #~=1.6.3
+pandas==1.4.0
+opacus==1.0.1
+scikit-image
+torch_optimizer
+tensorboard
+hydra-core
+opencv-python
+matplotlib
+seaborn
+einops
 
-pylibjpeg
-pylibjpeg-libjpeg
-python-gdcm
-pydicom
-kornia
+
+# project specific
+pathos
+opacus==1.0.1
+scikit-image==0.19.1
+torch-optimizer==0.3.0
+hydra-core==1.1.1
+opencv-python==4.5.5.62
+seaborn==0.11.2

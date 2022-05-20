@@ -1,6 +1,6 @@
 # @package dataset
 
-name: "CIFAR-100"
+name: "MNIST"
 
 load_params:
   root: "${storage_dir}"
@@ -17,5 +17,5 @@ drop_last: false
 subset: 0.0
 
 
-transform: val/cifar10
+transform: general/mnist
 

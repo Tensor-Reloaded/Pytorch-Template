@@ -139,7 +139,14 @@ def tensorboard_export_dump(writer):
                 json.dump(data, f)
     
     total_metrics = pd.DataFrame(columns=['run', 'tag', 'step', 'value'])
-    for root, dirs, files in os.walk(hydra.utils.to_absolute_path('outputs')):
+    if os.path.exists(hydra.utils.to_absolute_path('outputs')):
+        output_dir = hydra.utils.to_absolute_path('outputs')
+    elif os.path.exists(hydra.utils.to_absolute_path('multirun')):
+        output_dir = hydra.utils.to_absolute_path('multirun')
+    else:
+        return
+    
+    for root, dirs, files in os.walk(output_dir):
         for file in files:
             metrics = pd.DataFrame(columns=['run', 'tag', 'step', 'value'])
             if file == 'metrics.json':
@@ -169,7 +176,7 @@ def tensorboard_export_dump(writer):
                 fig.savefig(f"{root}/metrics.jpg")
                 total_metrics = total_metrics.append(metrics, ignore_index=True)
 
-    total_metrics.to_csv(hydra.utils.to_absolute_path('outputs')+"/total_metrics.csv")
+    total_metrics.to_csv(output_dir+"/total_metrics.csv")
 
     nr_metrics = len(total_metrics["tag"].unique())
     fig_nr_columns = int(max(np.ceil(np.sqrt(nr_metrics)),2))
@@ -184,6 +191,6 @@ def tensorboard_export_dump(writer):
         axs[idx].set_ylim(data.value.min()*0.8, data.value.max()*1.2)
         axs[idx].xaxis.set_tick_params(labelbottom=True)
         ax = sns.lineplot(ax=axs[idx], data=data, x="step", y="value", hue='run', style='run', markers=True)
-    fig.savefig(hydra.utils.to_absolute_path('outputs')+"/total_metrics.jpg")
+    fig.savefig(output_dir+"/total_metrics.jpg")
 
                 

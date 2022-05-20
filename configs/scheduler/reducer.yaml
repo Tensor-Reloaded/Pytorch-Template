@@ -1,8 +1,10 @@
 # @package scheduler
 
+name: ReduceLROnPlateau
+
 ReduceLROnPlateau:
   factor: 0.5
-  patience: 30
+  patience: 25
   min_lr: 0.0000001
   verbose: True
-  threshold: 0.005
+  threshold: 0.0005

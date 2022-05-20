@@ -9,9 +9,9 @@ load_params:
 save_in_memory: true
 
 shuffle: True
-batch_size: 128
+batch_size: 512
 num_workers: 4
-pin_memory: false
+pin_memory: true
 drop_last: true
 
 subset: 0.0

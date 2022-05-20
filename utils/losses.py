@@ -163,8 +163,6 @@ class BCEWithLogitsLoss(torch.nn.modules.Module):
         return self.fnc(prediction,target)
 
 
-
-
 losses = {
     'l1loss': {
         'constructor': nn.L1Loss,

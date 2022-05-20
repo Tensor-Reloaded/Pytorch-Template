@@ -1,3 +1,7 @@
+# PyCarhm specific
+.idea/*
+
+data/
 
 # VS Code specific
 .vscode
@@ -16,7 +20,10 @@ __pycache__/
 *.pth
 .hydra
 
+
 **/events.out.tfevents.*
+!results/**/events.out.tfevents.*
+!results*/**/events.out.tfevents.*
 # C extensions
 *.so
 

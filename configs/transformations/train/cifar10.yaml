@@ -15,16 +15,16 @@ OneHot:
   num_classes: 10
   apply_to: 'target'
 
-RandAugment:
-  N: 2
-  M: 8
-  std: 0.5
-  apply_to: 'input'
+# RandAugment:
+#   N: 2
+#   M: 8
+#   std: 0.5
+#   apply_to: 'input'
 
-RandomErasing:
-  min_area: 0.05
-  max_area: 0.15
-  apply_to: 'input'
+# RandomErasing:
+#   min_area: 0.05
+#   max_area: 0.15
+#   apply_to: 'input'
 
 ImageNormalize:
   mean: [0.491, 0.482, 0.446]

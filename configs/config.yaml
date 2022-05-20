@@ -1,4 +1,5 @@
 defaults:
+  - _self_
   - common: default
   - dataset/train@train_dataset: cifar10
   - dataset/val@val_dataset: cifar10
@@ -9,8 +10,8 @@ defaults:
   - metrics@val_metrics: [acc_ce] 
   - metrics@solver_metrics: [solver] 
   - model: PreResNet56
-  - optimizer: radam 
-  - scheduler: milestones
+  - optimizer: sgd 
+  - scheduler: StaticScheduler
   - override hydra/sweeper: basic   # nevergrad | basic
   - override hydra/launcher: basic
 
@@ -19,5 +20,7 @@ storage_dir: "${oc.env:TENSOR_RELOADED_DATADIR}"
 save_dir: "${train_dataset.name}/${model.name}/${aux_save_dir}/${seed}"
 
 load_model: ""
+load_optimizer: ""
+load_training_state: ""
 
 infer_only: False

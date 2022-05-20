@@ -1,6 +1,0 @@
-# @package scheduler
-
-CosineAnnealingLR:
-  nr_cycle: 8
-  T_max: ${optimizer.epoch}
-  eta_min: 0.0005

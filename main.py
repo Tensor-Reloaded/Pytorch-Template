@@ -9,6 +9,8 @@ from multiprocessing import Process, freeze_support
 from shutil import copyfile
 import pandas as pd
 
+from inspect import signature
+from functools import partial
 import numpy as np
 from collections import OrderedDict
 from skimage import transform
@@ -26,7 +28,6 @@ from torchvision import transforms as transforms
 import hydra
 from hydra.utils import get_original_cwd, to_absolute_path
 from omegaconf import DictConfig, OmegaConf
-from sklearn.metrics import cohen_kappa_score
 
 from utils import *
 from utils.misc import progress_bar, save_current_code
@@ -64,7 +65,7 @@ class Solver(object):
         self.train_loader = None
         self.val_loader = None
         self.infer_loader = None
-        self.es = EarlyStopping(patience=self.args.es_patience)
+        self.es = EarlyStopping(patience=self.args.es_patience, min_delta=self.args.es_min_delta)
         self.scaler = GradScaler(enabled=self.args.half and self.args.grad_scaler)
 
 
@@ -73,6 +74,7 @@ class Solver(object):
         else:
             self.writer = SummaryWriter(log_dir="runs/" + self.args.save_dir)
 
+        self.epoch = 1
         self.train_batch_plot_idx = 0
         self.val_batch_plot_idx = 0
 
@@ -81,7 +83,7 @@ class Solver(object):
 
         cache_index = None
         transformation_list = []
-        for idx, (name,parameters) in enumerate(transformations_config.items()):
+        for idx, (name, parameters) in enumerate(transformations_config.items()):
             if name not in transformations:
                 print(f"This transformation is not implemented ({name}), go ahead and commit it")
                 exit()
@@ -116,11 +118,21 @@ class Solver(object):
         if not hasattr(dataset_config, 'subset') or dataset_config.subset is None or dataset_config.subset == '' or dataset_config.subset <= 0:
             sampler = None
         else:
-            indices = ((np.random.random(len(dataset)) < dataset_config.subset).nonzero()[0]).tolist()
+            # indices = ((np.random.random(len(dataset)) < dataset_config.subset).nonzero()[0]).tolist()
+            if dataset_config.subset < 1.0:
+                ix_size = int(dataset_config.subset * len(dataset))
+            else:
+                ix_size = int(dataset_config.subset)
+            
+            indices = np.random.choice(len(dataset), size=ix_size, replace=False)
             sampler = SubsetRandomSampler(indices)
             dataset_config.shuffle = False
-        
-        loader = torch.utils.data.DataLoader(dataset=dataset, batch_size=dataset_config.batch_size, shuffle=(dataset_config.shuffle and sampler is None), sampler=sampler, num_workers=dataset_config.num_workers, collate_fn=collate_fn, pin_memory=dataset_config.pin_memory, drop_last=dataset_config.drop_last, persistent_workers=dataset_config.num_workers>0)
+
+        loader = torch.utils.data.DataLoader(dataset=dataset, batch_size=dataset_config.batch_size,
+                                             shuffle=(dataset_config.shuffle and sampler is None), sampler=sampler,
+                                             num_workers=dataset_config.num_workers, collate_fn=collate_fn,
+                                             pin_memory=dataset_config.pin_memory, drop_last=dataset_config.drop_last,
+                                             persistent_workers=dataset_config.num_workers > 0)
         return loader
 
     def init_dataset(self):
@@ -186,7 +198,7 @@ class Solver(object):
         self.model = self.model(**parameters)
 
 
-        self.save_dir = os.path.join(self.args.storage_dir,"model_weights",self.args.save_dir)
+        self.save_dir = os.path.join(self.args.storage_dir, "model_weights", self.args.save_dir)
         if not os.path.isdir(self.save_dir):
             os.makedirs(self.save_dir)
 
@@ -253,20 +265,28 @@ class Solver(object):
             try:
                 self.optimizer = getattr(optim, self.args.optimizer.name)
             except:
-                print(f"This optimizer is not implemented ({self.args.optimizer.name}), go ahead and commit it")
-                exit()
+                try:
+                    self.optimizer = optimizers[self.args.optimizer.name]
+                except:
+                    self.optimizer = getattr(torch.optim, self.args.optimizer.name)
+                    print(f"This optimizer is not implemented ({self.args.optimizer.name}), go ahead and commit it")
+                    exit()
 
         
         if self.args.optimizer.use_SAM:
             self.optimizer = optimizers['SAM'](params=parameters["params"],base_optimizer=self.optimizer,rho=self.args.optimizer.SAM_rho)
+        if hasattr(self.args.optimizer, "use_SAM") and self.args.optimizer.use_SAM:
+            self.optimizer = optimizers['SAM'](params=parameters["params"], base_optimizer=self.optimizer,
+                                               rho=self.args.optimizer.SAM_rho)
         else:
             self.optimizer = self.optimizer(**parameters)
-        
-        if self.args.optimizer.use_lookahead:
-            self.optimizer = torch_optimizer.Lookahead(self.optimizer, k=self.args.optimizer.lookahead_k, alpha=self.args.optimizer.lookahead_alpha)
+
+        if hasattr(self.args.optimizer, "use_lookahead") and self.args.optimizer.use_lookahead:
+            self.optimizer = torch_optimizer.Lookahead(self.optimizer, k=self.args.optimizer.lookahead_k,
+                                                       alpha=self.args.optimizer.lookahead_alpha)
 
     def init_scheduler(self):
-        (name,parameters) = self.args.scheduler.items()[0]
+        (name, parameters) = self.args.scheduler.items()[1]
         self.scheduler_name = name
         if name not in schedulers:
             print(f"This scheduler is not implemented ({name}), go ahead and commit it")
@@ -278,7 +298,7 @@ class Solver(object):
         self.scheduler = schedulers[name](**parameters)
 
     def init_criterion(self):
-        (name,parameters) = self.args.loss.items()[0]
+        (name, parameters) = self.args.loss.items()[0]
         if name not in losses:
             print(f"This loss is not implemented ({name}), go ahead and commit it")
             exit()
@@ -291,22 +311,21 @@ class Solver(object):
 
     def init_metrics(self):
         self.metrics = {
-            'train':{
-                'batch':[],
-                'epoch':[]
+            'train': {
+                'batch': [],
+                'epoch': []
             },
-            'val':{
-                'batch':[],
-                'epoch':[]
+            'val': {
+                'batch': [],
+                'epoch': []
             },
-            'solver':{
-                'batch':[],
-                'epoch':[]
+            'solver': {
+                'batch': [],
+                'epoch': []
             },
         }
 
-
-        for (name,args) in self.args.train_metrics.items():
+        for (name, args) in self.args.train_metrics.items():
             if name not in metrics:
                 print(f"This metric is not implemented ({name}), go ahead and commit it")
                 exit()
@@ -340,7 +359,7 @@ class Solver(object):
             for level in args.levels:
                 self.metrics['val'][level].append(metric_object)
 
-        for (name,args)  in self.args.solver_metrics.items():
+        for (name, args) in self.args.solver_metrics.items():
             if name not in metrics:
                 print(f"This metric is not implemented ({name}), go ahead and commit it")
                 exit()
@@ -374,11 +393,11 @@ class Solver(object):
         predictions = []
         targets = []
         for batch_num, (data, target) in enumerate(self.train_loader):
-            if isinstance(data,list) or isinstance(data,tuple):
+            if isinstance(data, list) or isinstance(data, tuple):
                 data = [i.to(self.device) for i in data]
             else:
                 data = data.to(self.device)
-            if isinstance(target,list) or isinstance(target,tuple):
+            if isinstance(target, list) or isinstance(target, tuple):
                 target = [i.to(self.device) for i in target]
             else:
                 target = target.to(self.device)
@@ -407,9 +426,9 @@ class Solver(object):
                         # Creates gradients
                         scaled_grad_params = torch.autograd.grad(outputs=self.scaler.scale(loss), inputs=self.model.parameters(), create_graph=True)
 
-                        #Creates unscaled grad_params before computing the penalty. scaled_grad_params are
+                        # Creates unscaled grad_params before computing the penalty. scaled_grad_params are
                         # not owned by any optimizer, so ordinary division is used instead of scaler.unscale_:
-                        inv_scale = 1./self.scaler.get_scale()
+                        inv_scale = 1. / self.scaler.get_scale()
                         grad_params = [p * inv_scale for p in scaled_grad_params]
 
                         # Computes the penalty term and adds it to the loss
@@ -425,13 +444,15 @@ class Solver(object):
                     if self.args.optimizer.batch_replay:
                         found_inf = False
                         for _, param in self.model.named_parameters():
-                            if  param.grad.isnan().any() or param.grad.isinf().any():
+                            if param.grad.isnan().any() or param.grad.isinf().any():
                                 found_inf = True
                                 break
                         if found_inf:
                             self.scaler.update()
-                            self.optimizer.zero_grad()#(set_to_none=True)
-                            if type(self.args.optimizer.batch_replay) == int or type(self.args.optimizer.batch_replay) == float: 
+                            self.optimizer.zero_grad()  # (set_to_none=True)
+                            self.model.zero_grad(set_to_none=True)
+                            if type(self.args.optimizer.batch_replay) == int or type(
+                                    self.args.optimizer.batch_replay) == float:
                                 self.args.optimizer.batch_replay -= 1
                         else:
                             break
@@ -440,33 +461,30 @@ class Solver(object):
 
                 if self.train_batch_plot_idx % self.args.train_dataset.update_every == 0:
                     self.scaler.unscale_(self.optimizer)
-                    
+
                     if self.args.optimizer.max_norm > 0.0:
                         torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.optimizer.max_norm)
                     self.enable_bn()
-                
 
-
-
-            while True: 
+            while True:
                 with autocast(enabled=self.args.half):
                     output = self.model(data)
                     if self.output_transformations is not None:
                         output = self.output_transformations(output)
-                    
+
                     if hasattr(self.args.model, 'returns_loss') and self.args.model.returns_loss:
                         loss = output
                     else:
                         loss = self.criterion(output, target)
                     loss = loss / self.args.train_dataset.update_every
 
-                if self.args.optimizer.grad_penalty is not None and self.args.optimizer.grad_penalty > 0.0:
+                if hasattr(self.args.optimizer, "grad_penalty") and self.args.optimizer.grad_penalty is not None and self.args.optimizer.grad_penalty > 0.0:
                     # Creates gradients
                     scaled_grad_params = torch.autograd.grad(outputs=self.scaler.scale(loss), inputs=self.model.parameters(), create_graph=True)
 
-                    #Creates unscaled grad_params before computing the penalty. scaled_grad_params are
+                    # Creates unscaled grad_params before computing the penalty. scaled_grad_params are
                     # not owned by any optimizer, so ordinary division is used instead of scaler.unscale_:
-                    inv_scale = 1./self.scaler.get_scale()
+                    inv_scale = 1. / self.scaler.get_scale()
                     grad_params = [p * inv_scale for p in scaled_grad_params]
 
                     # Computes the penalty term and adds it to the loss
@@ -479,16 +497,18 @@ class Solver(object):
 
                 self.scaler.scale(loss).backward()
 
-                if self.args.optimizer.batch_replay:
+                if hasattr(self.args.optimizer, "batch_replay") and self.args.optimizer.batch_replay:
                     found_inf = False
                     for _, param in self.model.named_parameters():
-                        if  param.grad.isnan().any() or param.grad.isinf().any():
+                        if param.grad.isnan().any() or param.grad.isinf().any():
                             found_inf = True
                             break
                     if found_inf:
                         self.scaler.update()
-                        self.optimizer.zero_grad()#(set_to_none=True)
-                        if type(self.args.optimizer.batch_replay) == int or type(self.args.optimizer.batch_replay) == float: 
+                        self.optimizer.zero_grad()  # (set_to_none=True)
+                        self.model.zero_grad(set_to_none=True)
+                        if type(self.args.optimizer.batch_replay) == int or type(
+                                self.args.optimizer.batch_replay) == float:
                             self.args.optimizer.batch_replay -= 1
                     else:
                         break
@@ -496,67 +516,46 @@ class Solver(object):
                     break
 
             if self.train_batch_plot_idx % self.args.train_dataset.update_every == 0:
+                step_partial_func = partial(self.scaler.step)
+                if "metric" in [param.name for param in signature(self.optimizer.step).parameters.values()]:
+                    step_partial_func = partial(step_partial_func, metric=metric)
+                    # step_partial_func = partial(self.scaler.step, metric=None)
+
+                if hasattr(self.args.optimizer, "use_SAM") and self.args.optimizer.use_SAM:
+                    step_partial_func = partial(step_partial_func, closure=sam_closure)
+
                 self.scaler.unscale_(self.optimizer)
-                
-                if self.args.optimizer.max_norm > 0.0:
+
+                if hasattr(self.args.optimizer, "max_norm") and self.args.optimizer.max_norm > 0.0:
                     torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.optimizer.max_norm)
-                
-                if self.args.optimizer.use_SAM:
-                    self.scaler.step(self.optimizer, closure=sam_closure)
-                    # self.model.update_moving_average()
-                else:
-                    self.scaler.step(self.optimizer)
-                    # self.model.update_moving_average()
+
+                step_partial_func(self.optimizer)
+                # self.model.update_moving_average()
 
                 self.scaler.update()
 
-                self.optimizer.zero_grad()#(set_to_none=True)
-                
+                self.optimizer.zero_grad()  # (set_to_none=True)
+                self.model.zero_grad(set_to_none=True)
+
                 if self.scheduler_name == "OneCycleLR":
                     self.scheduler.step()
 
+            predictions.extend(output)
+            targets.extend(target)
 
-            if isinstance(output,list) or isinstance(output,tuple):
-                for pred_idx, o in enumerate(output):
-                    o=o.cpu()
-                    if len(predictions) <= pred_idx:
-                        predictions.append(torch.tensor(o))
-                    else:
-                        predictions[pred_idx] = torch.cat((predictions[pred_idx], o))
-            else:
-                output=output.cpu()
-                if isinstance(output, torch.Tensor):
-                    predictions = output.clone().detach()
-                else:
-                    predictions = torch.tensor(output)
-
-            if isinstance(target,list) or isinstance(target,tuple):
-                for target_idx, t in enumerate(target):
-                    t=t.cpu()
-                    if len(targets) <= target_idx:
-                        targets.append(torch.tensor(t))
-                    else:
-                        targets[target_idx] = torch.cat((targets[target_idx], t))
-            else:
-                target=target.cpu()
-                if isinstance(target, torch.Tensor):
-                    targets = target.clone().detach()
-                else:
-                    targets = torch.tensor(target)
-            
             metrics_results = {}
             for metric in self.metrics['train']['batch']:
-                metrics_results["Train/Batch-"+metric.name] = metric.calculate(output, target, level='batch')
+                metrics_results["Train/Batch-" + metric.name] = metric.calculate(output, target, level='batch')
 
             for metric in self.metrics['solver']['batch']:
-                    metrics_results["Solver/Batch-"+metric.name] = metric.calculate(solver = self, level='batch')
+                metrics_results["Solver/Batch-" + metric.name] = metric.calculate(solver=self, level='batch')
 
             print_metrics(self.writer, metrics_results, self.get_train_batch_plot_idx())
 
             if self.args.progress_bar:
                 progress_bar(batch_num, len(self.train_loader))
 
-        return predictions, targets
+        return torch.stack(predictions), torch.stack(targets)
 
     def val(self):
         print("val:")
@@ -569,11 +568,11 @@ class Solver(object):
         targets = []
         with torch.no_grad():
             for batch_num, (data, target) in enumerate(self.val_loader):
-                if isinstance(data,list):
+                if isinstance(data, list):
                     data = [i.to(self.device) for i in data]
                 else:
                     data = data.to(self.device)
-                if isinstance(target,list):
+                if isinstance(target, list):
                     target = [i.to(self.device) for i in target]
                 else:
                     target = target.to(self.device)
@@ -582,52 +581,25 @@ class Solver(object):
                     output = self.model(data)
                     if self.output_transformations is not None:
                         output = self.output_transformations(output)
-                        
+
                     if hasattr(self.args.model, 'returns_loss') and self.args.model.returns_loss:
                         loss = output
                     else:
                         loss = self.criterion(output, target)
 
-
-                if isinstance(output,list) or isinstance(output,tuple):
-                    for pred_idx, o in enumerate(output):
-                        o=o.cpu()
-                        if len(predictions) <= pred_idx:
-                            predictions.append(torch.tensor(o))
-                        else:
-                            predictions[pred_idx] = torch.cat((predictions[pred_idx], o))
-                else:
-                    output=output.cpu()
-                    if isinstance(output, torch.Tensor):
-                        predictions = output
-                    else:
-                        predictions = torch.tensor(output)
-
-                if isinstance(target,list) or isinstance(target,tuple):
-                    for target_idx, t in enumerate(target):
-                        t=t.cpu()
-                        if len(targets) <= target_idx:
-                            targets.append(torch.tensor(t))
-                        else:
-                            targets[target_idx] = torch.cat((targets[target_idx], t))
-                else:
-                    target=target.cpu()
-                    if isinstance(target, torch.Tensor):
-                        targets = target
-                    else:
-                        targets = torch.tensor(target)
+                predictions.extend(output)
+                targets.extend(target)
 
                 metrics_results = {}
                 for metric in self.metrics['val']['batch']:
-                    metrics_results["Val/Batch-"+metric.name] = metric.calculate(output, target, level='batch')
-
+                    metrics_results["Val/Batch-" + metric.name] = metric.calculate(output, target, level='batch')
 
                 print_metrics(self.writer, metrics_results, self.get_val_batch_plot_idx())
 
                 if self.args.progress_bar:
                     progress_bar(batch_num, len(self.val_loader))
 
-        return predictions, targets
+        return torch.stack(predictions), torch.stack(targets)
 
     def infer(self):
         print("infer:")
@@ -647,22 +619,20 @@ class Solver(object):
                     if self.output_transformations is not None:
                         output = self.output_transformations(output)
 
-                
-                if isinstance(output,list) or isinstance(output,tuple):
+                if isinstance(output, list) or isinstance(output, tuple):
                     for pred_idx, o in enumerate(output):
-                        o=o.cpu()
+                        o = o.cpu()
                         if len(predictions) <= pred_idx:
                             predictions.append(torch.tensor(o))
                         else:
                             predictions[pred_idx] = torch.cat((predictions[pred_idx], o))
                 else:
-                    output=output.cpu()
+                    output = output.cpu()
                     if isinstance(output, torch.Tensor):
                         predictions = output
                     else:
                         predictions = torch.tensor(output)
-        
-                
+
                 filenames.extend(filename)
 
         return filenames, predictions
@@ -670,11 +640,29 @@ class Solver(object):
 
     def save(self, epoch, metric, tag=None):
         if tag != None:
-            tag = "_"+tag
+            tag = "_" + tag
         else:
             tag = ""
         model_out_path = os.path.join(self.save_dir, "model_{}_{}{}.pth".format(epoch, metric, tag))
+        optimizer_out_path = os.path.join(self.save_dir, "optimizer_{}_{}{}.pth".format(epoch, metric, tag))
+        training_state_out_path = os.path.join(self.save_dir, "training_state_{}_{}{}.pth".format(epoch, metric, tag))
         torch.save(self.model.state_dict(), model_out_path)
+        torch.save(self.optimizer.state_dict(), optimizer_out_path)
+
+        training_state = {
+            "epoch": self.epoch,
+            "batch_size": self.args.train_dataset.batch_size,
+            "train_batch_plot_idx": self.train_batch_plot_idx,
+            "val_batch_plot_idx": self.val_batch_plot_idx,
+        }
+
+        for metric in self.metrics['solver']['epoch']:
+            if metric.name == "Real Epoch Count":
+                training_state["real_epoch_count"] = metric.metric_func.counter
+                break
+
+        torch.save(training_state, training_state_out_path)
+
         print("Checkpoint saved to {}".format(model_out_path))
 
     def run(self):
@@ -687,17 +675,39 @@ class Solver(object):
         self.init_criterion()
         self.init_metrics()
 
+        if len(self.args.load_optimizer) > 0:
+            self.optimizer.load_state_dict(torch.load(self.args.load_optimizer))
+            print("Loaded optimizer from {}".format(self.args.load_optimizer))
+
+        if len(self.args.load_training_state) > 0:
+            training_state = torch.load(self.args.load_training_state)
+            self.epoch = training_state["epoch"]
+            self.train_batch_plot_idx = training_state["train_batch_plot_idx"]
+            self.val_batch_plot_idx = training_state["val_batch_plot_idx"]
+
+            for metric in self.metrics['solver']['epoch']:
+                if metric.name == "Real Epoch Count":
+                    metric.metric_func.counter = training_state["real_epoch_count"]
+                    break
+
+        # new_batch_size = self.optimizer.calculate_batch_size()
+        # if new_batch_size != self.train_loader.batch_size:
+        #     print("New batch size: {}".format(new_batch_size))
+        #     self.args.train_dataset.batch_size = new_batch_size
+        #     self.train_loader = self.construct_dataloader(self.args.train_dataset, self.train_set)
+
         try:
             if self.args.infer_only == True:
-                filenames, predictions = self.infer() # If its the "separated" dataset, we need to average the scores of the 2/3 different projections 
-                predictions = predictions.argmax(-1)+1
+                filenames, predictions = self.infer()  # If its the "separated" dataset, we need to average the scores of the 2/3 different projections
+                predictions = predictions.argmax(-1) + 1
                 save_path = os.path.join(self.save_dir, "predictions.csv")
-                pd.DataFrame({'Patient': filenames, 'Class': predictions.cpu().numpy()}).to_csv(save_path, header=False, index=False)
+                pd.DataFrame({'Patient': filenames, 'Class': predictions.cpu().numpy()}).to_csv(save_path, header=False,
+                                                                                                index=False)
                 exit()
 
             best_metrics = {}
             higher_is_better = metrics[self.args.optimized_metric.split('/')[-1]]['higher_is_better']
-            for epoch in range(1, self.args.epochs + 1):
+            for epoch in range(self.epoch, self.args.epochs + 1):
                 print("\n===> epoch: %d/%d" % (epoch, self.args.epochs))
                 self.epoch = epoch
 
@@ -705,28 +715,28 @@ class Solver(object):
 
                 predictions, targets = self.train()
                 for metric in self.metrics['train']['epoch']:
-                    metric_name = "Train/"+metric.name
+                    metric_name = "Train/" + metric.name
                     result = metric.calculate(predictions, targets, level='epoch')
                     if type(result) is dict:
                         for each_key in result.keys():
-                            metrics_results[metric_name+"_{0}".format(each_key)] = result[each_key] 
+                            metrics_results[metric_name + "_{0}".format(each_key)] = result[each_key]
                     else:
                         metrics_results[metric_name] = result
 
                 if self.epoch % self.args.val_every == 0:
                     predictions, targets = self.val()
                     for metric in self.metrics['val']['epoch']:
-                        metric_name = "Val/"+metric.name
+                        metric_name = "Val/" + metric.name
                         result = metric.calculate(predictions, targets, level='epoch')
                         if type(result) is dict:
                             for each_key in result.keys():
-                                metrics_results[metric_name+"_{0}".format(each_key)] = result[each_key] 
+                                metrics_results[metric_name + "_{0}".format(each_key)] = result[each_key]
                         else:
                             metrics_results[metric_name] = result
 
                 for metric in self.metrics['solver']['epoch']:
-                    metric_name = "Solver/"+metric.name
-                    metrics_results[metric_name] = metric.calculate(solver = self, level='epoch')
+                    metric_name = "Solver/" + metric.name
+                    metrics_results[metric_name] = metric.calculate(solver=self, level='epoch')
 
                 print_metrics(self.writer, metrics_results, self.epoch)
 
@@ -737,7 +747,7 @@ class Solver(object):
                         best_metrics[self.args.optimized_metric] = metrics_results[self.args.optimized_metric]
                         save_best_metric = True
                     if higher_is_better:
-                        if  best_metrics[self.args.optimized_metric] < metrics_results[self.args.optimized_metric]:
+                        if best_metrics[self.args.optimized_metric] < metrics_results[self.args.optimized_metric]:
                             best_metrics[self.args.optimized_metric] = metrics_results[self.args.optimized_metric]
                             save_best_metric = True
                     else:

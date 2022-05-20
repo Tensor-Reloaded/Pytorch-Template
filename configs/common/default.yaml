@@ -12,6 +12,7 @@ save_interval: 10
 epochs: 300
 val_every: 1
 es_patience: 100000
-es_metric: 'Train/Accuracy'
-scheduler_metric: 'Train/Accuracy'
+es_min_delta: 0.0001
+es_metric: 'Train/crossentropyloss'
+scheduler_metric: 'Train/crossentropyloss'
 optimized_metric: "Val/Accuracy"

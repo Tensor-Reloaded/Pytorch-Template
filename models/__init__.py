@@ -4,3 +4,4 @@ from .ViT import *
 from .Recorder import *
 from .DINO import *
 from .PerceiverIO import *
+from .MLP import *

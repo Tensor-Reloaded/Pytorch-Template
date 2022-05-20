@@ -64,15 +64,15 @@ def add_chart_point(chart_name, x, y,save_path=None):
     print(f'{{"chart": "{chart_name}", "x":{x}, "y":{y}}}')
 
 def format_time(seconds):
-    days = int(seconds / 3600/24)
-    seconds = seconds - days*3600*24
+    days = int(seconds / 3600 / 24)
+    seconds = seconds - days * 3600 * 24
     hours = int(seconds / 3600)
-    seconds = seconds - hours*3600
+    seconds = seconds - hours * 3600
     minutes = int(seconds / 60)
-    seconds = seconds - minutes*60
+    seconds = seconds - minutes * 60
     secondsf = int(seconds)
     seconds = seconds - secondsf
-    millis = int(seconds*1000)
+    millis = int(seconds * 1000)
 
     f = ''
     i = 1
@@ -95,10 +95,11 @@ def format_time(seconds):
         f = '0ms'
     return f
 
+
 def save_current_code(path: str):
     print(f"Saving current code to {path}")
     project_root = HydraConfig.get().runtime.cwd
-    unwanted_dirs = ["venv", f"utils{os.path.sep}__pycache__",
+    unwanted_dirs = ["venv", f"utils{os.path.sep}__pycache__", "multirun", ".github",
                      "outputs", "results", ".idea", ".git", "runs", f"models{os.path.sep}__pycache__", "data"]
     unwanted_extensions = ["", "txt", "md"]
     with zipfile.ZipFile(os.path.join(path, "files.zip"), "w", zipfile.ZIP_DEFLATED) as z:
