@@ -59,35 +59,40 @@ class MemoryStoredDataset(Dataset):
 
         self.cache_index = cache_index
         self.save_in_memory = save_in_memory
-        if self.save_in_memory == False:
+        if not self.save_in_memory:
             self.cache_index = 0
-        
+
         if self.cache_index is None or self.cache_index == 0:
             self.save_in_memory = False
-            
-        self.stuff_in_memory = {}
+
+        if self.save_in_memory:
+            self.stuff_in_memory = []
+            for idx in range(len(self.dataset)):
+                tensor, target = self.dataset[idx]
+                for t in self.transformations.transforms[:self.cache_index]:
+                    tensor, target = t((tensor, target))
+                self.stuff_in_memory.append((tensor, target))
 
     def __len__(self):
         return len(self.dataset)
 
-    def __getitem__(self, idx):
-        if idx in self.stuff_in_memory:
-            tensor, target = self.stuff_in_memory[idx]
-        else:
-            tensor, target = self.dataset[idx]
-
-            for t in self.transformations.transforms[:self.cache_index]:
-                tensor, target = t((tensor, target))
-            
-            if self.save_in_memory:
-                self.stuff_in_memory[idx] = (tensor, target) 
-                
+    def getitem_cached(self, idx):
+        tensor, target = self.stuff_in_memory[idx]
         for t in self.transformations.transforms[self.cache_index:]:
             tensor, target = t((tensor, target))
-
         return tensor, target
 
+    def getitem_not_cached(self, idx):
+        tensor, target = self.dataset[idx]
+        for t in self.transformations.transforms:
+            tensor, target = t((tensor, target))
+        return tensor, target
 
+    def __getitem__(self, idx):
+        # We can't escape this if. self.__getitem__ = self.getitem_cached does not work
+        if self.save_in_memory:
+            return self.getitem_cached(idx)
+        return self.getitem_not_cached(idx)
 
 
 class ComposedDataset(Dataset):
