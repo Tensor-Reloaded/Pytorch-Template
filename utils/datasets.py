@@ -72,6 +72,9 @@ class MemoryStoredDataset(Dataset):
                 for t in self.transformations.transforms[:self.cache_index]:
                     tensor, target = t((tensor, target))
                 self.stuff_in_memory.append((tensor, target))
+            self.getitem = self.getitem_cached
+        else:
+            self.getitem = self.getitem_not_cached
 
     def __len__(self):
         return len(self.dataset)
@@ -89,10 +92,7 @@ class MemoryStoredDataset(Dataset):
         return tensor, target
 
     def __getitem__(self, idx):
-        # We can't escape this if. self.__getitem__ = self.getitem_cached does not work
-        if self.save_in_memory:
-            return self.getitem_cached(idx)
-        return self.getitem_not_cached(idx)
+        return self.getitem(idx)
 
 
 class ComposedDataset(Dataset):
