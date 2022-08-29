@@ -19,17 +19,17 @@ class TransformWrapper(object):
     def __init__(self, transform, apply_to=None):
         self.transform = transform
         self.apply_to = apply_to
+        if apply_to is None:
+            self.apply = lambda x: transform(x)
+        elif apply_to == 'input':
+            self.apply = lambda x: (transform(x[0]), x[1])
+        elif apply_to == 'target':
+            self.apply = lambda x: (x[0], transform(x[1]))
+        else:
+            raise ValueError("apply_to must be 'input' or 'target'")
 
     def __call__(self, data):
-        if self.apply_to is None:
-            return self.transform(data)
-        else:
-            if self.apply_to == 'input':
-                return self.transform(data[0]), data[1]
-            elif self.apply_to == 'target':
-                return data[0], self.transform(data[1])
-            else:
-                raise ValueError("apply_to must be 'input' or 'target'")
+        return self.apply(data)
 
 
 
