@@ -93,7 +93,12 @@ class Solver(object):
         parameters = OmegaConf.to_container(dataset_config.load_params, resolve=True)
         parameters = {k: v for k, v in parameters.items() if v is not None}
 
-        dataset = MemoryStoredDataset(dataset=datasets[dataset_config.name](**parameters),
+        if not hasattr(dataset_config, 'subset') or dataset_config.subset is None or dataset_config.subset == '' or dataset_config.subset <= 0:
+            dataset = datasets[dataset_config.name](**parameters)
+        else:
+            dataset = select_dataset_subset(datasets[dataset_config.name](**parameters), dataset_config.subset)
+
+        dataset = MemoryStoredDataset(dataset=dataset,
                                       transformations_cached=transformations_cached,
                                       transformations_not_cached=transformations_not_cached,
                                       save_in_memory=dataset_config.save_in_memory)
@@ -106,19 +111,7 @@ class Solver(object):
         else:
             collate_fn = None
 
-        if not hasattr(dataset_config,
-                       'subset') or dataset_config.subset is None or dataset_config.subset == '' or dataset_config.subset <= 0:
-            sampler = None
-        else:
-            # indices = ((np.random.random(len(dataset)) < dataset_config.subset).nonzero()[0]).tolist()
-            if dataset_config.subset < 1.0:
-                ix_size = int(dataset_config.subset * len(dataset))
-            else:
-                ix_size = int(dataset_config.subset)
-
-            indices = np.random.choice(len(dataset), size=ix_size, replace=False)
-            sampler = SubsetRandomSampler(indices)
-            dataset_config.shuffle = False
+        sampler = None
 
         if os.name == 'nt':
             dataset_config.num_workers = 0

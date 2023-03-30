@@ -1,3 +1,4 @@
+import numpy as np
 import torchvision
 from torch.utils.data import Dataset
 from torchvision import transforms
@@ -27,6 +28,20 @@ datasets = {
     'ImageNet2012': torchvision.datasets.ImageFolder,
     'MNIST': torchvision.datasets.MNIST,
 }
+
+
+def select_dataset_subset(dataset, subset):
+    if subset < 1.0:
+        ix_size = int(subset * len(dataset))
+    else:
+        ix_size = int(subset)
+    indices = np.random.choice(len(dataset), size=ix_size, replace=False)
+
+    dataset_subset = []
+    for idx in indices:
+        dataset_subset.append(dataset[idx])
+
+    return dataset_subset
 
 
 class MemoryStoredDataset(Dataset):
