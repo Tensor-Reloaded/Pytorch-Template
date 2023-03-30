@@ -527,6 +527,7 @@ class Solver(object):
                 if self.scheduler_name == "OneCycleLR":
                     self.scheduler.step()
 
+            # TODO: Check here for your particular case, and detach and move to CPU these 2 tensors
             predictions.extend(output)
             targets.extend(target)
 
@@ -672,12 +673,6 @@ class Solver(object):
                 if metric.name == "Real Epoch Count":
                     metric.metric_func.counter = training_state["real_epoch_count"]
                     break
-
-        # new_batch_size = self.optimizer.calculate_batch_size()
-        # if new_batch_size != self.train_loader.batch_size:
-        #     print("New batch size: {}".format(new_batch_size))
-        #     self.args.train_dataset.batch_size = new_batch_size
-        #     self.train_loader = self.construct_dataloader(self.args.train_dataset, self.train_set)
 
         try:
             if self.args.infer_only == True:
