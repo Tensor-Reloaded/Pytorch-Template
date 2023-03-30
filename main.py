@@ -119,6 +119,9 @@ class Solver(object):
             sampler = SubsetRandomSampler(indices)
             dataset_config.shuffle = False
 
+        if os.name == 'nt':
+            dataset_config.num_workers = 0
+
         loader = torch.utils.data.DataLoader(dataset=dataset, batch_size=dataset_config.batch_size,
                                              shuffle=(dataset_config.shuffle and sampler is None), sampler=sampler,
                                              num_workers=dataset_config.num_workers, collate_fn=collate_fn,
@@ -275,7 +278,7 @@ class Solver(object):
                                                        alpha=self.args.optimizer.lookahead_alpha)
 
     def init_scheduler(self):
-        (name, parameters) = self.args.scheduler.items()[1]
+        (name, parameters) = list(self.args.scheduler.items())[1]
         self.scheduler_name = name
         if name not in schedulers:
             print(f"This scheduler is not implemented ({name}), go ahead and commit it")
@@ -287,7 +290,7 @@ class Solver(object):
         self.scheduler = schedulers[name](**parameters)
 
     def init_criterion(self):
-        (name, parameters) = self.args.loss.items()[0]
+        (name, parameters) = list(self.args.loss.items())[0]
         if name not in losses:
             print(f"This loss is not implemented ({name}), go ahead and commit it")
             exit()
@@ -373,12 +376,6 @@ class Solver(object):
     def train(self):
         print("train:")
         self.model.train()
-        total_loss = 0
-        correct = 0
-        total = 0
-
-        # accumulation_data = []
-        # accumulation_target = []
 
         predictions = []
         targets = []
@@ -391,10 +388,6 @@ class Solver(object):
                 target = [i.to(self.device) for i in target]
             else:
                 target = target.to(self.device)
-
-            # if self.args.optimizer.use_SAM:
-            #     accumulation_data.append(data)
-            #     accumulation_target.append(target)
 
             def sam_closure():
                 self.disable_bn()
@@ -548,9 +541,6 @@ class Solver(object):
     def val(self):
         print("val:")
         self.model.eval()
-        total_loss = 0
-        correct = 0
-        total = 0
 
         predictions = []
         targets = []
