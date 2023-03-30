@@ -12,6 +12,7 @@ Hacked together by / Copyright 2020 Ross Wightman
 
 __all__ = ['Mixup', 'FastCollateMixup']
 
+
 def one_hot(x, num_classes, on_value=1., off_value=0., device='cuda'):
     x = x.long().view(-1, 1)
     return torch.full((x.size()[0], num_classes), off_value, device=device).scatter_(1, x, on_value)
@@ -96,6 +97,7 @@ class Mixup:
         label_smoothing (float): apply label smoothing to the mixed target tensor
         num_classes (int): number of classes for target
     """
+
     def __init__(self, mixup_alpha=1., cutmix_alpha=1., cutmix_minmax=None, prob=1.0, switch_prob=0.5,
                  mode='batch', correct_lam=True, label_smoothing=0.1, num_classes=5):
         self.mixup_alpha = mixup_alpha
@@ -274,7 +276,7 @@ class FastCollateMixup(Mixup):
     def _mix_batch_collate(self, output, batch):
         batch_size = len(batch)
         lam, use_cutmix = self._params_per_batch()
-        if use_cutmix: # Make these work for 2D and 3D
+        if use_cutmix:  # Make these work for 2D and 3D
             (yl, yh, xl, xh), lam = cutmix_bbox_and_lam(
                 output.shape, lam, ratio_minmax=self.cutmix_minmax, correct_lam=self.correct_lam)
         for i in range(batch_size):
@@ -287,7 +289,7 @@ class FastCollateMixup(Mixup):
                 else:
                     mixed = mixed.float() * lam + batch[j][0].float() * (1 - lam)
                     mixed = torch.round(mixed)
-            output[i] += mixed#.type(torch.uint8)
+            output[i] += mixed  # .type(torch.uint8)
         return lam
 
     def __call__(self, batch, _=None):
@@ -307,4 +309,3 @@ class FastCollateMixup(Mixup):
         target = mixup_target(target, self.num_classes, lam, self.label_smoothing, device='cpu')
         target = target[:batch_size]
         return output, target
-

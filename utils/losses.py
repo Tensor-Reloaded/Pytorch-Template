@@ -1,8 +1,7 @@
 import torch
-from torch.autograd import Variable
 import torch.nn.functional as F
-import numpy as np
 from torch import nn
+
 try:
     from itertools import ifilterfalse
 except ImportError:  # py3k
@@ -20,7 +19,7 @@ class TorchDiceLoss(nn.Module):
     def forward(self, outputs, targets):
         if self.logits:
             outputs = torch.sigmoid(outputs)
-        
+
         batch_size = outputs.size()[0]
         eps = 1e-5
         if not self.per_image:
@@ -31,9 +30,6 @@ class TorchDiceLoss(nn.Module):
         union = torch.sum(dice_output, dim=1) + torch.sum(dice_target, dim=1) + eps
         loss = (1 - (2 * intersection + eps) / union).mean()
         return loss
-
-
-
 
 
 class TorchFocalLoss(nn.Module):
@@ -77,11 +73,12 @@ class TorchFocalLoss(nn.Module):
             BCE_loss = F.binary_cross_entropy(outputs, targets,
                                               reduction='none')
         pt = torch.exp(-BCE_loss)
-        F_loss = (1-pt)**self.gamma * BCE_loss
+        F_loss = (1 - pt) ** self.gamma * BCE_loss
         if self.reduce:
             return torch.mean(F_loss)
         else:
             return F_loss
+
 
 class TorchJaccardLoss(torch.nn.modules.Module):
     # modified from XD_XD's implementation
@@ -112,10 +109,9 @@ class TorchStableBCELoss(torch.nn.modules.Module):
         return loss.mean()
 
 
-
 class SoftTargetCrossEntropy(torch.nn.modules.Module):
 
-    def __init__(self, class_weights = None, device='cuda'):
+    def __init__(self, class_weights=None, device='cuda'):
         super(SoftTargetCrossEntropy, self).__init__()
         self.device = device
         self.class_weights = None
@@ -130,10 +126,9 @@ class SoftTargetCrossEntropy(torch.nn.modules.Module):
         return loss.mean()
 
 
-
 class CrossEntropyLoss(torch.nn.modules.Module):
 
-    def __init__(self, class_weights = None, device='cuda', reduction='mean'):
+    def __init__(self, class_weights=None, device='cuda', reduction='mean'):
         super(CrossEntropyLoss, self).__init__()
         self.device = device
         if class_weights != None:
@@ -143,14 +138,12 @@ class CrossEntropyLoss(torch.nn.modules.Module):
             self.fnc = nn.CrossEntropyLoss(reduction=reduction)
 
     def forward(self, prediction, target):
-        return self.fnc(prediction.float(),target.argmax(-1))
-
-
+        return self.fnc(prediction.float(), target.argmax(-1))
 
 
 class BCEWithLogitsLoss(torch.nn.modules.Module):
 
-    def __init__(self, class_weights = None, device='cuda'):
+    def __init__(self, class_weights=None, device='cuda'):
         super(BCEWithLogitsLoss, self).__init__()
         self.device = device
         if class_weights != None:
@@ -160,7 +153,7 @@ class BCEWithLogitsLoss(torch.nn.modules.Module):
             self.fnc = nn.BCEWithLogitsLoss()
 
     def forward(self, prediction, target):
-        return self.fnc(prediction,target)
+        return self.fnc(prediction, target)
 
 
 losses = {

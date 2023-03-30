@@ -1,19 +1,9 @@
 import random
 import math 
 import torch
-import torch.nn.functional as F
-
-from torch.nn.functional import conv2d
 from torchvision import transforms as transforms
-
-from scipy.fftpack import dct, idct
-
-import numpy as np
-import skimage.morphology
-from skimage.morphology import disk
-import cv2 as cv
-
 from .randaugment import RandAugment
+
 
 class TransformWrapper(object):
     def __init__(self, transform, apply_to=None):
@@ -30,7 +20,6 @@ class TransformWrapper(object):
 
     def __call__(self, data):
         return self.apply(data)
-
 
 
 class LightingNoise(object):
@@ -80,9 +69,8 @@ class Resize(object):
         self.interpolation = interpolation
 
     def __call__(self, data):
-        if isinstance(data, np.ndarray):
-            return cv.resize(data, dsize=self.size)
-
+        # if isinstance(data, np.ndarray):
+        #     return cv.resize(data, dsize=self.size)
         return torch.nn.functional.interpolate(data.unsqueeze(0), size=self.size, scale_factor=None,
                                                mode=self.interpolation, align_corners=None,
                                                recompute_scale_factor=None).squeeze(0)
@@ -94,7 +82,6 @@ class Identity(object):
 
     def __call__(self, img):
         return img
-
 
 
 def _get_pixels(per_pixel, rand_color, patch_size, dtype=torch.float32, device='cuda'):
@@ -236,12 +223,14 @@ class Squeeze(object):
 
     def __call__(self, tensor):
         return tensor.squeeze(self.dimension)
-        
+
+
 class Half(object):
     def __init__(self):
         pass
     def __call__(self, tensor):
         return tensor.half()
+
 
 class TensorType(object):
     def __init__(self, dtype):
@@ -250,11 +239,14 @@ class TensorType(object):
     def __call__(self, tensor):
         return tensor.type(self.dtype)
 
+
 class ToTensor(object):
     def __init__(self):
         pass
+
     def __call__(self, tensor):
         return torch.tensor(tensor)
+
 
 class Normalize(object):
     def __init__(self, maximum=None, minimum=None):
