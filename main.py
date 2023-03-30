@@ -65,7 +65,9 @@ class Solver(object):
         self.train_batch_plot_idx = 0
         self.val_batch_plot_idx = 0
 
-    def construct_transformations(self, transformation_config):
+    @staticmethod
+    def construct_transformations(transformation_config):
+        # TODO: This is a static function, it can be moved into a separate file to free up main
         transformations_config = OmegaConf.load(
             to_absolute_path(f'configs/transformations/{transformation_config}.yaml'))
         cacheable_transformations = []
@@ -89,7 +91,9 @@ class Solver(object):
 
         return cacheable_transformations, uncacheable_transformations
 
-    def construct_dataset(self, dataset_config, transformations_cached, transformations_not_cached):
+    @staticmethod
+    def construct_dataset(dataset_config, transformations_cached, transformations_not_cached):
+        # TODO: This is a static method, it can be moved outside to free up main
         parameters = OmegaConf.to_container(dataset_config.load_params, resolve=True)
         parameters = {k: v for k, v in parameters.items() if v is not None}
 
@@ -105,7 +109,9 @@ class Solver(object):
 
         return dataset
 
-    def construct_dataloader(self, dataset_config, dataset):
+    @staticmethod
+    def construct_dataloader(dataset_config, dataset):
+        # TODO: This is a static method, it can be moved outside to free main
         if hasattr(dataset_config, 'mixup_args') and dataset_config.mixup_args != None:
             collate_fn = FastCollateMixup(**dataset_config.mixup_args)
         else:
@@ -124,6 +130,7 @@ class Solver(object):
         return loader
 
     def init_dataset(self):
+        # TODO: This initialization can be separated into 3 functions and can be moved outside
         if hasattr(self.args, 'train_dataset'):
             if self.args.train_dataset.name not in datasets:
                 print(f"This dataset is not implemented ({self.args.train_dataset.name}), go ahead and commit it")
@@ -169,6 +176,7 @@ class Solver(object):
             self.output_transformations = transforms.Compose(cacheable + not_cacheable)
 
     def init_model(self):
+        # TODO: This can also be refactored out and moved outside
         if self.cuda:
             cudnn.benchmark = True
 
@@ -221,6 +229,7 @@ class Solver(object):
         self.model = self.model.to(self.device)
 
     def init_optimizer(self):
+        # TODO: This can also be moved outside
         parameters = OmegaConf.to_container(self.args.optimizer.parameters, resolve=True)
         parameters = {k: v for k, v in parameters.items() if v is not None}
         parameters["params"] = self.model.parameters()
@@ -252,6 +261,7 @@ class Solver(object):
                                                        alpha=self.args.optimizer.lookahead_alpha)
 
     def init_scheduler(self):
+        # Same as above
         (name, parameters) = list(self.args.scheduler.items())[1]
         self.scheduler_name = name
         if name not in schedulers:
@@ -264,6 +274,7 @@ class Solver(object):
         self.scheduler = schedulers[name](**parameters)
 
     def init_criterion(self):
+        # TODO: Same as above
         (name, parameters) = list(self.args.loss.items())[0]
         if name not in losses:
             print(f"This loss is not implemented ({name}), go ahead and commit it")
@@ -276,6 +287,7 @@ class Solver(object):
         self.criterion = losses[name]['constructor'](**parameters)
 
     def init_metrics(self):
+        # TODO: Same, can be moved outside
         self.metrics = {
             'train': {
                 'batch': [],

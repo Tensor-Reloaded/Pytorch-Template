@@ -6,3 +6,4 @@ from .learn_utils import EarlyStopping, get_mean_and_std, reset_seed, compute_we
 from .metrics import metrics, Metric
 from .optimizers import optimizers
 from .mixup import Mixup, FastCollateMixup
+from .initializers import init_weights
