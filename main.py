@@ -193,32 +193,7 @@ class Solver(object):
         if not os.path.isdir(self.save_dir):
             os.makedirs(self.save_dir)
 
-        if self.args.initialization == 1:
-            # xavier init
-            for m in self.model.modules():
-                if isinstance(m, (nn.Conv2d, nn.Linear)):
-                    nn.init.xavier_uniform(
-                        m.weight, gain=nn.init.calculate_gain('relu'))
-        elif self.args.initialization == 2:
-            # he initialization
-            for m in self.model.modules():
-                if isinstance(m, (nn.Conv2d, nn.Linear)):
-                    nn.init.kaiming_normal_(m.weight, mode='fan_in')
-        elif self.args.initialization == 3:
-            # selu init
-            for m in self.model.modules():
-                if isinstance(m, nn.Conv2d):
-                    fan_in = m.kernel_size[0] * \
-                             m.kernel_size[1] * m.in_channels
-                    nn.init.normal(m.weight, 0, torch.sqrt(1. / fan_in))
-                elif isinstance(m, nn.Linear):
-                    fan_in = m.in_features
-                    nn.init.normal(m.weight, 0, torch.sqrt(1. / fan_in))
-        elif self.args.initialization == 4:
-            # orthogonal initialization
-            for m in self.model.modules():
-                if isinstance(m, (nn.Conv2d, nn.Linear)):
-                    nn.init.orthogonal_(m.weight)
+        init_weights(self.model, self.args.initialization)
 
         if self.args.initialization_batch_norm:
             # batch norm initialization
