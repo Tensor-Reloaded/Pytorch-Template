@@ -1,37 +1,26 @@
-import collections
-import sys
-import pprint
-import argparse
-import pickle
 import os
-import re
-from multiprocessing import Process, freeze_support
-from shutil import copyfile
-import pandas as pd
-
-from functools import partial
-import numpy as np
 from collections import OrderedDict
-from skimage import transform
+from functools import partial
+from shutil import copyfile
+
+import hydra
+import numpy as np
+import pandas as pd
 import torch.backends.cudnn as cudnn
-import torch.optim as optim
-import torch_optimizer
 import torch.nn as nn
-import torch.nn.functional as F
+import torch.optim as optim
 import torch.utils.data
-from torch.utils.data.sampler import SubsetRandomSampler
+import torch_optimizer
+from hydra.utils import to_absolute_path
+from omegaconf import DictConfig, OmegaConf
 from torch.cuda.amp import autocast, GradScaler
-import torchvision
+from torch.utils.data.sampler import SubsetRandomSampler
 from torch.utils.tensorboard import SummaryWriter
 from torchvision import transforms as transforms
-import hydra
-from hydra.utils import get_original_cwd, to_absolute_path
-from omegaconf import DictConfig, OmegaConf
 
+import models
 from utils import *
 from utils.misc import progress_bar, save_current_code
-import models
-
 
 
 @hydra.main(config_path='configs', config_name='config')
@@ -67,7 +56,6 @@ class Solver(object):
         self.es = EarlyStopping(patience=self.args.es_patience, min_delta=self.args.es_min_delta)
         self.scaler = GradScaler(enabled=self.args.half and self.args.grad_scaler)
 
-
         if not self.args.save_dir:
             self.writer = SummaryWriter()
         else:
@@ -78,7 +66,8 @@ class Solver(object):
         self.val_batch_plot_idx = 0
 
     def construct_transformations(self, transformation_config):
-        transformations_config = OmegaConf.load(to_absolute_path(f'configs/transformations/{transformation_config}.yaml'))
+        transformations_config = OmegaConf.load(
+            to_absolute_path(f'configs/transformations/{transformation_config}.yaml'))
 
         cache_index = None
         transformation_list = []
@@ -104,7 +93,9 @@ class Solver(object):
         parameters = OmegaConf.to_container(dataset_config.load_params, resolve=True)
         parameters = {k: v for k, v in parameters.items() if v is not None}
 
-        dataset = MemoryStoredDataset(dataset=datasets[dataset_config.name](**parameters), transformations=transformations, save_in_memory=dataset_config.save_in_memory, cache_index=cache_index)
+        dataset = MemoryStoredDataset(dataset=datasets[dataset_config.name](**parameters),
+                                      transformations=transformations, save_in_memory=dataset_config.save_in_memory,
+                                      cache_index=cache_index)
 
         return dataset
 
@@ -114,7 +105,8 @@ class Solver(object):
         else:
             collate_fn = None
 
-        if not hasattr(dataset_config, 'subset') or dataset_config.subset is None or dataset_config.subset == '' or dataset_config.subset <= 0:
+        if not hasattr(dataset_config,
+                       'subset') or dataset_config.subset is None or dataset_config.subset == '' or dataset_config.subset <= 0:
             sampler = None
         else:
             # indices = ((np.random.random(len(dataset)) < dataset_config.subset).nonzero()[0]).tolist()
@@ -122,7 +114,7 @@ class Solver(object):
                 ix_size = int(dataset_config.subset * len(dataset))
             else:
                 ix_size = int(dataset_config.subset)
-            
+
             indices = np.random.choice(len(dataset), size=ix_size, replace=False)
             sampler = SubsetRandomSampler(indices)
             dataset_config.shuffle = False
@@ -140,13 +132,13 @@ class Solver(object):
                 print(f"This dataset is not implemented ({self.args.train_dataset.name}), go ahead and commit it")
                 exit()
             if hasattr(self.args.train_dataset, 'transform'):
-                train_transformations, train_cache_index = self.construct_transformations(self.args.train_dataset.transform)
+                train_transformations, train_cache_index = self.construct_transformations(
+                    self.args.train_dataset.transform)
             else:
                 train_transformations, train_cache_index = None, None
             self.train_set = self.construct_dataset(self.args.train_dataset, train_transformations, train_cache_index)
             self.train_loader = self.construct_dataloader(self.args.train_dataset, self.train_set)
 
-    
         if hasattr(self.args, 'val_dataset'):
             if self.args.val_dataset.name not in datasets:
                 print(f"This dataset is not implemented ({self.args.val_dataset.name}), go ahead and commit it")
@@ -163,7 +155,8 @@ class Solver(object):
                 print(f"This dataset is not implemented ({self.args.infer_dataset.name}), go ahead and commit it")
                 exit()
             if hasattr(self.args.infer_dataset, 'transform'):
-                infer_transformations, infer_cache_index = self.construct_transformations(self.args.infer_dataset.transform)
+                infer_transformations, infer_cache_index = self.construct_transformations(
+                    self.args.infer_dataset.transform)
             else:
                 infer_transformations, infer_cache_index = None, None
             self.infer_set = self.construct_dataset(self.args.infer_dataset, infer_transformations, infer_cache_index)
@@ -172,8 +165,6 @@ class Solver(object):
         self.output_transformations = None
         if hasattr(self.args, 'output_transformation'):
             self.output_transformations, _ = self.construct_transformations(self.args.output_transformation)
-
-
 
     def init_model(self):
         if self.cuda:
@@ -196,7 +187,6 @@ class Solver(object):
             exit()
         self.model = self.model(**parameters)
 
-
         self.save_dir = os.path.join(self.args.storage_dir, "model_weights", self.args.save_dir)
         if not os.path.isdir(self.save_dir):
             os.makedirs(self.save_dir)
@@ -217,7 +207,7 @@ class Solver(object):
             for m in self.model.modules():
                 if isinstance(m, nn.Conv2d):
                     fan_in = m.kernel_size[0] * \
-                        m.kernel_size[1] * m.in_channels
+                             m.kernel_size[1] * m.in_channels
                     nn.init.normal(m.weight, 0, torch.sqrt(1. / fan_in))
                 elif isinstance(m, nn.Linear):
                     fan_in = m.in_features
@@ -243,7 +233,7 @@ class Solver(object):
 
                 for key, value in loaded_model.items():
                     # if key.startswith('net.transformer.'):
-                        # new_state_dict[key[16:]] = value
+                    # new_state_dict[key[16:]] = value
                     if key.startswith('net.'):
                         new_state_dict[key[4:]] = value
 
@@ -271,9 +261,9 @@ class Solver(object):
                     print(f"This optimizer is not implemented ({self.args.optimizer.name}), go ahead and commit it")
                     exit()
 
-        
         if self.args.optimizer.use_SAM:
-            self.optimizer = optimizers['SAM'](params=parameters["params"],base_optimizer=self.optimizer,rho=self.args.optimizer.SAM_rho)
+            self.optimizer = optimizers['SAM'](params=parameters["params"], base_optimizer=self.optimizer,
+                                               rho=self.args.optimizer.SAM_rho)
         if hasattr(self.args.optimizer, "use_SAM") and self.args.optimizer.use_SAM:
             self.optimizer = optimizers['SAM'](params=parameters["params"], base_optimizer=self.optimizer,
                                                rho=self.args.optimizer.SAM_rho)
@@ -337,11 +327,12 @@ class Solver(object):
             if args.parameters is None:
                 args.parameters = {}
             metric_func = metrics[name]['constructor'](**args.parameters)
-            metric_object = Metric(name, metric_func, index=metric_index, solver_metric=False, aggregator=args.aggregator)
+            metric_object = Metric(name, metric_func, index=metric_index, solver_metric=False,
+                                   aggregator=args.aggregator)
             for level in args.levels:
                 self.metrics['train'][level].append(metric_object)
 
-        for (name,args)  in self.args.val_metrics.items():
+        for (name, args) in self.args.val_metrics.items():
             if name not in metrics:
                 print(f"This metric is not implemented ({name}), go ahead and commit it")
                 exit()
@@ -350,11 +341,12 @@ class Solver(object):
                 metric_index = None
             else:
                 metric_index = args.index
-                
+
             if args.parameters is None:
                 args.parameters = {}
             metric_func = metrics[name]['constructor'](**args.parameters)
-            metric_object = Metric(name, metric_func, index=metric_index, solver_metric=False, aggregator=args.aggregator)
+            metric_object = Metric(name, metric_func, index=metric_index, solver_metric=False,
+                                   aggregator=args.aggregator)
             for level in args.levels:
                 self.metrics['val'][level].append(metric_object)
 
@@ -369,7 +361,6 @@ class Solver(object):
             metric_object = Metric(name, metric_func, index=None, solver_metric=True, aggregator=args.aggregator)
             for level in args.levels:
                 self.metrics['solver'][level].append(metric_object)
-
 
     def disable_bn(self):
         for module in self.model.modules():
@@ -405,16 +396,14 @@ class Solver(object):
             #     accumulation_data.append(data)
             #     accumulation_target.append(target)
 
-
-            
             def sam_closure():
                 self.disable_bn()
-                while True: 
+                while True:
                     with autocast(enabled=self.args.half):
                         output = self.model(data)
                         if self.output_transformations is not None:
                             output = self.output_transformations(output)
-                        
+
                         if hasattr(self.args.model, 'returns_loss') and self.args.model.returns_loss:
                             loss = output
                         else:
@@ -423,7 +412,8 @@ class Solver(object):
 
                     if self.args.optimizer.grad_penalty is not None and self.args.optimizer.grad_penalty > 0.0:
                         # Creates gradients
-                        scaled_grad_params = torch.autograd.grad(outputs=self.scaler.scale(loss), inputs=self.model.parameters(), create_graph=True)
+                        scaled_grad_params = torch.autograd.grad(outputs=self.scaler.scale(loss),
+                                                                 inputs=self.model.parameters(), create_graph=True)
 
                         # Creates unscaled grad_params before computing the penalty. scaled_grad_params are
                         # not owned by any optimizer, so ordinary division is used instead of scaler.unscale_:
@@ -477,9 +467,11 @@ class Solver(object):
                         loss = self.criterion(output, target)
                     loss = loss / self.args.train_dataset.update_every
 
-                if hasattr(self.args.optimizer, "grad_penalty") and self.args.optimizer.grad_penalty is not None and self.args.optimizer.grad_penalty > 0.0:
+                if hasattr(self.args.optimizer,
+                           "grad_penalty") and self.args.optimizer.grad_penalty is not None and self.args.optimizer.grad_penalty > 0.0:
                     # Creates gradients
-                    scaled_grad_params = torch.autograd.grad(outputs=self.scaler.scale(loss), inputs=self.model.parameters(), create_graph=True)
+                    scaled_grad_params = torch.autograd.grad(outputs=self.scaler.scale(loss),
+                                                             inputs=self.model.parameters(), create_graph=True)
 
                     # Creates unscaled grad_params before computing the penalty. scaled_grad_params are
                     # not owned by any optimizer, so ordinary division is used instead of scaler.unscale_:
@@ -633,7 +625,6 @@ class Solver(object):
 
         return filenames, predictions
 
-
     def save(self, epoch, metric, tag=None):
         if tag != None:
             tag = "_" + tag
@@ -736,7 +727,6 @@ class Solver(object):
 
                 print_metrics(self.writer, metrics_results, self.epoch)
 
-                
                 if self.epoch % self.args.val_every == 0:
                     save_best_metric = False
                     if self.args.optimized_metric not in best_metrics:
@@ -751,10 +741,10 @@ class Solver(object):
                             best_metrics[self.args.optimized_metric] = metrics_results[self.args.optimized_metric]
                             save_best_metric = True
 
-
                     if save_best_metric:
                         self.save(epoch, best_metrics[self.args.optimized_metric])
-                        print("===> BEST "+self.args.optimized_metric+" PERFORMANCE: %.5f" % best_metrics[self.args.optimized_metric])
+                        print("===> BEST " + self.args.optimized_metric + " PERFORMANCE: %.5f" % best_metrics[
+                            self.args.optimized_metric])
 
                 if self.args.save_model and epoch % self.args.save_interval == 0:
                     self.save(epoch, 0)
@@ -774,7 +764,8 @@ class Solver(object):
         except KeyboardInterrupt:
             pass
 
-        print("===> BEST "+self.args.optimized_metric+" PERFORMANCE: %.5f" % best_metrics[self.args.optimized_metric])
+        print(
+            "===> BEST " + self.args.optimized_metric + " PERFORMANCE: %.5f" % best_metrics[self.args.optimized_metric])
         files = os.listdir(self.save_dir)
         paths = [os.path.join(self.save_dir, basename) for basename in files if "_0" not in basename]
         if len(paths) > 0:
@@ -782,12 +773,11 @@ class Solver(object):
             copyfile(src, os.path.join("runs", self.args.save_dir, os.path.basename(src)))
 
         with open("runs/" + self.args.save_dir + "/README.md", 'a+') as f:
-            f.write("\n## "+self.args.optimized_metric+"\n %.5f" % (best_metrics[self.args.optimized_metric]))
+            f.write("\n## " + self.args.optimized_metric + "\n %.5f" % (best_metrics[self.args.optimized_metric]))
         tensorboard_export_dump(self.writer)
         print("Saved best accuracy checkpoint")
 
         return best_metrics[self.args.optimized_metric]
-
 
     def get_train_batch_plot_idx(self):
         self.train_batch_plot_idx += 1
@@ -796,7 +786,6 @@ class Solver(object):
     def get_val_batch_plot_idx(self):
         self.val_batch_plot_idx += 1
         return self.val_batch_plot_idx - 1
-
 
 
 if __name__ == '__main__':

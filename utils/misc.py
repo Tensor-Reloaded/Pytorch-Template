@@ -1,7 +1,6 @@
 import sys
 import time
 import os
-import pathlib
 import zipfile
 from hydra.core.hydra_config import HydraConfig
 
@@ -9,8 +8,8 @@ TOTAL_BAR_LENGTH = 80
 LAST_T = time.time()
 BEGIN_T = LAST_T
 
-def progress_bar(current, total, msg=None):
 
+def progress_bar(current, total, msg=None):
     global LAST_T, BEGIN_T
     if current == 0:
         BEGIN_T = time.time()  # Reset for new bar.
@@ -46,22 +45,26 @@ def progress_bar(current, total, msg=None):
         sys.stdout.write('\n')
     sys.stdout.flush()
 
-def begin_chart(chart_name, x_axis_name,save_path=None):
+
+def begin_chart(chart_name, x_axis_name, save_path=None):
     if save_path is not None:
-        with open(os.path.join(save_path,chart_name + '.tsv'),"w") as fd:
-            fd.write(str(x_axis_name)+"\t"+chart_name+"\n")
+        with open(os.path.join(save_path, chart_name + '.tsv'), "w") as fd:
+            fd.write(str(x_axis_name) + "\t" + chart_name + "\n")
 
     print(f'{{"chart":"{chart_name}", "axis": "{x_axis_name}"}}')
 
-def begin_per_epoch_chart(chart_name,save_path=None):
-    begin_chart(chart_name, 'Epoch',save_path=save_path)
 
-def add_chart_point(chart_name, x, y,save_path=None):
+def begin_per_epoch_chart(chart_name, save_path=None):
+    begin_chart(chart_name, 'Epoch', save_path=save_path)
+
+
+def add_chart_point(chart_name, x, y, save_path=None):
     if save_path is not None:
-        with open(os.path.join(save_path,chart_name + '.tsv'),"a+") as fd:
-            fd.write(str(x)+"\t"+str(y)+"\n")
-    
+        with open(os.path.join(save_path, chart_name + '.tsv'), "a+") as fd:
+            fd.write(str(x) + "\t" + str(y) + "\n")
+
     print(f'{{"chart": "{chart_name}", "x":{x}, "y":{y}}}')
+
 
 def format_time(seconds):
     days = int(seconds / 3600 / 24)

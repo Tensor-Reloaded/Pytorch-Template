@@ -1,24 +1,3 @@
-import os
-import hashlib
-import gzip
-import tarfile
-import re
-import pickle
-from PIL import Image
-import json
-
-import hydra
-from omegaconf import DictConfig, OmegaConf
-
-from skimage import io
-from skimage import transform
-from skimage.morphology import binary_erosion
-from skimage.transform import resize, rotate
-
-import pandas as pd
-import numpy as np
-
-import torch
 import torchvision
 from torch.utils.data import Dataset
 
@@ -42,9 +21,7 @@ CIFAR_100_CLASSES = (
     'worm'
 )
 
-
-
-datasets = {    
+datasets = {
     'CIFAR-10': torchvision.datasets.CIFAR10,
     'CIFAR-100': torchvision.datasets.CIFAR100,
     'ImageNet2012': torchvision.datasets.ImageFolder,
@@ -114,14 +91,13 @@ class ComposedDataset(Dataset):
         tensors = []
         targets = []
         for d in self.dataset_list:
-            tensor, target = d[idx%len(d)]
+            tensor, target = d[idx % len(d)]
             tensors.append(tensor)
             targets.append(target)
         return tensors, targets
 
 
 datasets['ComposedDataset'] = ComposedDataset
-
 
 if __name__ == '__main__':
     pass

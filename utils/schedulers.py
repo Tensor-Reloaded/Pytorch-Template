@@ -1,6 +1,5 @@
-import torch
-from torch import nn
 from torch import optim
+
 
 class StaticScheduler(object):
     def __init__(self, optimizer):
@@ -8,6 +7,7 @@ class StaticScheduler(object):
 
     def step(self):
         pass
+
 
 schedulers = {
     'ReduceLROnPlateau': optim.lr_scheduler.ReduceLROnPlateau,

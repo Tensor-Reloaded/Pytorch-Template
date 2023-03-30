@@ -1,8 +1,6 @@
 import torch
-from torch.autograd import Variable
 import torch.nn.functional as F
-import numpy as np
-from torch import nn
+
 from .losses import losses
 
 
@@ -182,8 +180,6 @@ class Learning_Rate(object):
         return solver.optimizer.param_groups[0]['lr']
 
 
-
-
 metrics = {
     'F1': {
         'constructor': F1,
@@ -209,7 +205,7 @@ metrics = {
         'constructor': Learning_Rate,
         'higher_is_better': None
     },
-    'Identity':{
+    'Identity': {
         'constructor': Identity,
         'higher_is_better': False
     },

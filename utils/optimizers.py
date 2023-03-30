@@ -1,6 +1,5 @@
 import torch
-import torch_optimizer
-import torch.optim as optim
+
 
 class SAM(torch.optim.Optimizer):
     def __init__(self, params, base_optimizer, rho=0.5, adaptive=True, **kwargs):
@@ -47,22 +46,23 @@ class SAM(torch.optim.Optimizer):
         self.second_step()
 
     def _grad_norm(self):
-        shared_device = self.param_groups[0]["params"][0].device  # put everything on the same device, in case of model parallelism
+        shared_device = self.param_groups[0]["params"][
+            0].device  # put everything on the same device, in case of model parallelism
         norm = torch.norm(
-                    torch.stack([
-                        ((torch.abs(p) if group["adaptive"] else 1.0) * p.grad).norm(p=2).to(shared_device)
-                        for group in self.param_groups for p in group["params"]
-                        if p.grad is not None
-                    ]),
-                    p=2
-               )
+            torch.stack([
+                ((torch.abs(p) if group["adaptive"] else 1.0) * p.grad).norm(p=2).to(shared_device)
+                for group in self.param_groups for p in group["params"]
+                if p.grad is not None
+            ]),
+            p=2
+        )
         return norm
 
     def load_state_dict(self, state_dict):
         super().load_state_dict(state_dict)
         self.base_optimizer.param_groups = self.param_groups
 
-optimizers = {
-    'SAM':SAM
-}
 
+optimizers = {
+    'SAM': SAM
+}
