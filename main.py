@@ -68,9 +68,9 @@ class Solver(object):
     def construct_transformations(self, transformation_config):
         transformations_config = OmegaConf.load(
             to_absolute_path(f'configs/transformations/{transformation_config}.yaml'))
+        cacheable_transformations = []
+        uncacheable_transformations = []
 
-        cache_index = None
-        transformation_list = []
         for idx, (name, parameters) in enumerate(transformations_config.items()):
             if name not in transformations:
                 print(f"This transformation is not implemented ({name}), go ahead and commit it")
@@ -80,22 +80,23 @@ class Solver(object):
             if 'apply_to' in parameters:
                 apply_to = parameters.pop('apply_to')
             transformation = transformations[name]
-            if cache_index is None and not transformation['cacheable']:
-                cache_index = idx
             transformation_fnc = TransformWrapper(transformation['constructor'](**parameters), apply_to)
-            transformation_list.append(transformation_fnc)
-        if cache_index is None:
-            cache_index = idx
-        transformation_list = transforms.Compose(transformation_list) if len(transformation_list) > 0 else None
-        return transformation_list, cache_index
 
-    def construct_dataset(self, dataset_config, transformations, cache_index=0):
+            if transformation['cacheable']:
+                cacheable_transformations.append(transformation_fnc)
+            else:
+                uncacheable_transformations.append(transformation_fnc)
+
+        return cacheable_transformations, uncacheable_transformations
+
+    def construct_dataset(self, dataset_config, transformations_cached, transformations_not_cached):
         parameters = OmegaConf.to_container(dataset_config.load_params, resolve=True)
         parameters = {k: v for k, v in parameters.items() if v is not None}
 
         dataset = MemoryStoredDataset(dataset=datasets[dataset_config.name](**parameters),
-                                      transformations=transformations, save_in_memory=dataset_config.save_in_memory,
-                                      cache_index=cache_index)
+                                      transformations_cached=transformations_cached,
+                                      transformations_not_cached=transformations_not_cached,
+                                      save_in_memory=dataset_config.save_in_memory)
 
         return dataset
 
@@ -135,11 +136,12 @@ class Solver(object):
                 print(f"This dataset is not implemented ({self.args.train_dataset.name}), go ahead and commit it")
                 exit()
             if hasattr(self.args.train_dataset, 'transform'):
-                train_transformations, train_cache_index = self.construct_transformations(
+                train_transformations_cache, train_transformations_not_cache = self.construct_transformations(
                     self.args.train_dataset.transform)
             else:
-                train_transformations, train_cache_index = None, None
-            self.train_set = self.construct_dataset(self.args.train_dataset, train_transformations, train_cache_index)
+                train_transformations_cache, train_transformations_not_cache = None, None
+            self.train_set = self.construct_dataset(self.args.train_dataset, train_transformations_cache,
+                                                    train_transformations_not_cache)
             self.train_loader = self.construct_dataloader(self.args.train_dataset, self.train_set)
 
         if hasattr(self.args, 'val_dataset'):
@@ -147,10 +149,12 @@ class Solver(object):
                 print(f"This dataset is not implemented ({self.args.val_dataset.name}), go ahead and commit it")
                 exit()
             if hasattr(self.args.val_dataset, 'transform'):
-                val_transformations, val_cache_index = self.construct_transformations(self.args.val_dataset.transform)
+                val_transformations_cache, val_transformations_not_cache = self.construct_transformations(
+                    self.args.val_dataset.transform)
             else:
-                val_transformations, val_cache_index = None, None
-            self.val_set = self.construct_dataset(self.args.val_dataset, val_transformations, val_cache_index)
+                val_transformations_cache, val_transformations_not_cache = None, None
+            self.val_set = self.construct_dataset(self.args.val_dataset, val_transformations_cache,
+                                                  val_transformations_not_cache)
             self.val_loader = self.construct_dataloader(self.args.val_dataset, self.val_set)
 
         if hasattr(self.args, 'infer_dataset'):
@@ -158,16 +162,18 @@ class Solver(object):
                 print(f"This dataset is not implemented ({self.args.infer_dataset.name}), go ahead and commit it")
                 exit()
             if hasattr(self.args.infer_dataset, 'transform'):
-                infer_transformations, infer_cache_index = self.construct_transformations(
+                infer_transformations_cache, infer_transformations_not_cache = self.construct_transformations(
                     self.args.infer_dataset.transform)
             else:
-                infer_transformations, infer_cache_index = None, None
-            self.infer_set = self.construct_dataset(self.args.infer_dataset, infer_transformations, infer_cache_index)
+                infer_transformations_cache, infer_transformations_not_cache = None, None
+            self.infer_set = self.construct_dataset(self.args.infer_dataset, infer_transformations_cache,
+                                                    infer_transformations_not_cache)
             self.infer_loader = self.construct_dataloader(self.args.infer_dataset, self.infer_set)
 
         self.output_transformations = None
         if hasattr(self.args, 'output_transformation'):
-            self.output_transformations, _ = self.construct_transformations(self.args.output_transformation)
+            cacheable, not_cacheable = self.construct_transformations(self.args.output_transformation)
+            self.output_transformations = transforms.Compose(cacheable + not_cacheable)
 
     def init_model(self):
         if self.cuda:

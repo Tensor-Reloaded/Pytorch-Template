@@ -1,6 +1,6 @@
 import torchvision
 from torch.utils.data import Dataset
-
+from torchvision import transforms
 
 CIFAR_10_CLASSES = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
 CIFAR_100_CLASSES = (
@@ -30,46 +30,40 @@ datasets = {
 
 
 class MemoryStoredDataset(Dataset):
-    def __init__(self, dataset, transformations=None, save_in_memory=False, cache_index=0):
+    def __init__(self, dataset, transformations_cached=None, transformations_not_cached=None, save_in_memory=False):
         self.dataset = dataset
-        self.transformations = transformations
 
-        self.cache_index = cache_index
-        self.save_in_memory = save_in_memory
-        if not self.save_in_memory:
-            self.cache_index = 0
+        if transformations_cached is None:
+            transformations_cached = []
+        if transformations_not_cached is None:
+            transformations_not_cached = []
 
-        if self.cache_index is None or self.cache_index == 0:
-            self.save_in_memory = False
-
-        if self.save_in_memory:
-            self.stuff_in_memory = []
-            for idx in range(len(self.dataset)):
-                tensor, target = self.dataset[idx]
-                for t in self.transformations.transforms[:self.cache_index]:
-                    tensor, target = t((tensor, target))
-                self.stuff_in_memory.append((tensor, target))
-            self.getitem = self.getitem_cached
+        save_in_memory = save_in_memory and len(transformations_cached) > 0
+        if not save_in_memory:
+            self.transformations = transforms.Compose(transformations_cached + transformations_not_cached)
         else:
-            self.getitem = self.getitem_not_cached
+            self.cache_transformations(transforms.Compose(transformations_cached))
+            self.transformations = transforms.Compose(transformations_not_cached)
+
+    def cache_transformations(self, transformations):
+        dataset_copy = []
+
+        for idx in range(len(self.dataset)):
+            tensor, target = self.dataset[idx]
+            for t in transformations.transforms:
+                tensor, target = t((tensor, target))
+            dataset_copy.append((tensor, target))
+
+        self.dataset = dataset_copy
 
     def __len__(self):
         return len(self.dataset)
 
-    def getitem_cached(self, idx):
-        tensor, target = self.stuff_in_memory[idx]
-        for t in self.transformations.transforms[self.cache_index:]:
-            tensor, target = t((tensor, target))
-        return tensor, target
-
-    def getitem_not_cached(self, idx):
+    def __getitem__(self, idx):
         tensor, target = self.dataset[idx]
         for t in self.transformations.transforms:
             tensor, target = t((tensor, target))
         return tensor, target
-
-    def __getitem__(self, idx):
-        return self.getitem(idx)
 
 
 class ComposedDataset(Dataset):
