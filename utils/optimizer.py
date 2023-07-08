@@ -36,6 +36,13 @@ def init_optimizer(optimizer_config, model):
     return optimizer
 
 
+def maybe_load_optimizer(optimizer, optimizer_path, restart_from_backup):
+    if len(optimizer_path) > 0 and restart_from_backup:
+        optimizer.load_state_dict(torch.load(optimizer_path))
+        logging.info(f"Loaded optimizer from {optimizer_path}")
+    return optimizer
+
+
 # TODO: use library one
 class SAM(torch.optim.Optimizer):
     def __init__(self, params, base_optimizer, rho=0.5, adaptive=True, **kwargs):

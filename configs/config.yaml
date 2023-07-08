@@ -19,6 +19,8 @@ defaults:
   - override hydra/sweeper: basic   # nevergrad | basic
   - override hydra/launcher: basic
 
+restart_from_backup: False  # TODO: Use restart from backup everywhere
+
 aux_save_dir: 'baseline'
 storage_dir: "${oc.env:TENSOR_RELOADED_DATADIR}"
 save_dir: "${train_dataset.name}/${model.name}/${aux_save_dir}/${seed}"

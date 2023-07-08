@@ -1,4 +1,6 @@
+from __future__ import annotations
 import logging
+from typing import Dict, Sequence
 
 import numpy as np
 import torch
@@ -7,6 +9,20 @@ import torch.nn.functional as F
 
 from . import attr_is_valid
 from .losses import losses
+
+
+def register_metrics(training_metrics: Dict[str, Dict[str, Sequence[Metric]]], metric_type: str, metric_level: str,
+                     metric_results: dict, **kwargs) -> dict:
+    metric_prefix = metric_type.capitalize() + "/" + "Batch-" if metric_level == "batch" else ""
+    for metric in training_metrics[metric_type][metric_level]:
+        metric_name = metric_prefix + metric.name
+        result = metric.calculate(level=metric_level, **kwargs)
+        if type(result) is dict:
+            for each_key in result.keys():
+                metric_results[metric_name + f"_{each_key}"] = result[each_key]
+        else:
+            metric_results[metric_name] = result
+    return metric_results
 
 
 def init_metric(metric_args, metric_name: str, solver_metric: bool, training_metrics: dict):
@@ -122,7 +138,7 @@ class F1(object):
         self.recall_func = Recall(class_list, weighted)
 
     def __call__(self, **kwargs):
-        prediction = kwargs["prediction"], target = kwargs["target"]
+        prediction, target = kwargs["prediction"], kwargs["target"]
         precision = self.precision_func(prediction, target)
         recall = self.recall_func(prediction, target)
 
@@ -141,7 +157,7 @@ class Accuracy(object):
         self.topk = topk
 
     def __call__(self, **kwargs):
-        prediction = kwargs["prediction"], target = kwargs["target"]
+        prediction, target = kwargs["prediction"], kwargs["target"]
         # TODO: Use library code
         if self.topk > 1:
             with torch.no_grad():
@@ -221,7 +237,7 @@ class Recall(object):
         self.weighted = weighted
 
     def __call__(self, **kwargs):
-        prediction = kwargs["prediction"], target = kwargs["target"]
+        prediction, target = kwargs["prediction"], kwargs["target"]
         # TODO: Use library code
         preds = F.one_hot(prediction.argmax(-1), target.shape[-1])
         true_pred, false_pred = target == preds, target != preds

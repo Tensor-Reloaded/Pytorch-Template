@@ -15,7 +15,7 @@ def init_scheduler(scheduler_config, optimizer):
     parameters = {k: v for k, v in parameters.items() if v is not None}
     parameters["optimizer"] = optimizer
     scheduler = schedulers[name](**parameters)
-    return scheduler
+    return scheduler, name
 
 
 class StaticScheduler(object):

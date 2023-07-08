@@ -2,6 +2,7 @@ import random
 
 import numpy as np
 import torch
+from torch.utils.tensorboard import SummaryWriter
 
 
 def apply_if_exists(args, attr: str, op: callable):
@@ -29,3 +30,6 @@ def maybe_reset_seed(seed: int) -> None:
     random.seed(seed)
 
 
+def print_metrics(writer: SummaryWriter, result: dict, idx: int) -> None:
+    for key, value in result.items():
+        writer.add_scalar(key, value, idx)
