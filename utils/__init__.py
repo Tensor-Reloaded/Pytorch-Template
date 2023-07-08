@@ -5,3 +5,4 @@ from .transformations import init_transforms
 from .dataloader import init_dataloader
 from .model import init_model, init_weights, init_batch_norm, load_model
 from .optimizer import init_optimizer
+from .schedulers import init_scheduler
