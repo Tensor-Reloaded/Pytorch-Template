@@ -1,3 +1,7 @@
+hydra:
+  job:
+    chdir: True
+
 defaults:
   - _self_
   - common: default
