@@ -1,9 +1,11 @@
 import logging
+import os
 
 import hydra
 from omegaconf import DictConfig
 
-from utils import configure, maybe_reset_seed, prepare_dataset_and_transforms, init_dataset, init_dataloader
+from utils import configure, maybe_reset_seed, prepare_dataset_and_transforms, init_dataset, init_dataloader, \
+    init_model, init_weights, init_batch_norm, load_model
 
 
 @hydra.main(version_base=None, config_path='configs', config_name='config')
@@ -14,6 +16,7 @@ def main(config: DictConfig) -> None:
 
 class Solver:
     def __init__(self, config: DictConfig):
+        self.save_dir = None
         self.infer_loader = None
         self.infer_set = None
         self.test_loader = None
@@ -23,6 +26,7 @@ class Solver:
         self.train_loader = None
         self.train_set = None
         self.train_set = None
+        self.model = None
         self.args = config
         self.device = self.args.device
 
@@ -50,6 +54,21 @@ class Solver:
         self.val_set, self.val_loader = self.get_set_and_loader("val_dataset")
         self.test_set, self.test_loader = self.get_set_and_loader("test_dataset")
         self.infer_set, self.infer_loader = self.get_set_and_loader("infer_dataset")
+
+    def init_model(self):
+        self.model = init_model(self.args.model)
+
+        self.save_dir = os.path.join(self.args.storage_dir, "model_weights", self.args.save_dir)
+        if not os.path.isdir(self.save_dir):
+            os.makedirs(self.save_dir)
+
+        init_weights(self.model, self.args.initialization)
+        if self.args.initialization_batch_norm:
+            init_batch_norm(self.model)
+        if len(self.args.load_model) > 0:
+            self.model = load_model(self.args.model, self.args.load_model, self.model, self.device)
+
+        self.model = self.model.to(self.device)
 
 
     def run(self):
