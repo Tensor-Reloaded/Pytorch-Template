@@ -11,7 +11,7 @@ from omegaconf import OmegaConf
 from torch.utils.data import Dataset
 
 from .transformations import init_transforms
-from .utils import attr_is_valid
+from . import attr_is_valid
 
 
 def prepare_dataset_and_transforms(dataset_config):
