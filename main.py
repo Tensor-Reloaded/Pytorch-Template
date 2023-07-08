@@ -5,7 +5,7 @@ import hydra
 from omegaconf import DictConfig
 
 from utils import configure, maybe_reset_seed, prepare_dataset_and_transforms, init_dataset, init_dataloader, \
-    init_model, init_weights, init_batch_norm, load_model
+    init_model, init_weights, init_batch_norm, load_model, init_optimizer
 
 
 @hydra.main(version_base=None, config_path='configs', config_name='config')
@@ -16,6 +16,7 @@ def main(config: DictConfig) -> None:
 
 class Solver:
     def __init__(self, config: DictConfig):
+        self.optimizer = None
         self.save_dir = None
         self.infer_loader = None
         self.infer_set = None
@@ -65,11 +66,13 @@ class Solver:
         init_weights(self.model, self.args.initialization)
         if self.args.initialization_batch_norm:
             init_batch_norm(self.model)
-        if len(self.args.load_model) > 0:
+        if len(self.args.load_model):
             self.model = load_model(self.args.model, self.args.load_model, self.model, self.device)
 
         self.model = self.model.to(self.device)
 
+    def init_optimizer(self):
+        self.optimizer = init_optimizer(self.args.optimizer, self.model)
 
     def run(self):
         self.init()

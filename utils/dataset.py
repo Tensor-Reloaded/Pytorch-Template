@@ -14,15 +14,15 @@ from .transformations import init_transforms
 from .utils import attr_is_valid
 
 
-def prepare_dataset_and_transforms(dataset):
-    if dataset.name not in datasets:
-        logging.error(f"Dataset {dataset.name} not implemented!")
+def prepare_dataset_and_transforms(dataset_config):
+    if dataset_config.name not in datasets:
+        logging.error(f"Dataset {dataset_config.name} not implemented!")
         exit()
     cached_transforms, runtime_transforms = None, None
-    if hasattr(dataset, "transform"):
-        cached_transforms, runtime_transforms = init_transforms(dataset.transform)
+    if hasattr(dataset_config, "transform"):
+        cached_transforms, runtime_transforms = init_transforms(dataset_config.transform)
 
-    return dataset, cached_transforms, runtime_transforms
+    return dataset_config, cached_transforms, runtime_transforms
 
 
 def init_dataset(dataset_config, cached_transforms, runtime_transforms, device) -> DatasetWrapper:
