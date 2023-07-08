@@ -5,7 +5,7 @@ import hydra
 from omegaconf import DictConfig
 
 from utils import configure, maybe_reset_seed, prepare_dataset_and_transforms, init_dataset, init_dataloader, \
-    init_model, init_weights, init_batch_norm, load_model, init_optimizer, init_scheduler
+    init_model, init_weights, init_batch_norm, load_model, init_optimizer, init_scheduler, init_criterion
 
 
 @hydra.main(version_base=None, config_path='configs', config_name='config')
@@ -78,6 +78,8 @@ class Solver:
         # TODO: Implement many schedulers (list of schedulers)
         init_scheduler(self.args.scheduler, self.optimizer)
 
+    def init_criterion(self):
+        init_criterion(self.args.loss, self.device, hasattr(self.args, "dba"))
 
     def run(self):
         self.init()
