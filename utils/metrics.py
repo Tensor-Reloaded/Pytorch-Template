@@ -82,6 +82,7 @@ class LossWrapper:
         self.loss_func = loss_func
 
     def __call__(self, **kwargs):
+        # TODO: If the loss is already calculated (in kwargs), do not recalculate it
         return self.loss_func(kwargs["prediction"], kwargs["target"])
 
 

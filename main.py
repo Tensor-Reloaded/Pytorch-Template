@@ -15,7 +15,7 @@ from tqdm import tqdm
 from utils import configure, maybe_reset_seed, prepare_dataset_and_transforms, init_dataset, init_dataloader, \
     init_model, init_weights, init_batch_norm, load_model, init_optimizer, init_scheduler, init_criterion, \
     init_metrics, maybe_load_optimizer, metrics, register_metrics, EarlyStopping, tensorboard_export_dump, \
-    print_metrics, get_batch_size, to_device, attr_is_valid
+    print_metrics, get_batch_size, to_device, attr_is_valid, disable_bn, enable_bn
 
 
 @hydra.main(version_base=None, config_path='configs', config_name='config')
@@ -335,12 +335,69 @@ class Solver:
             return True
         return False
 
-    def train_create_scaler_func(self):
+    def train_create_scaler_func(self, data, target):
         step_partial_func = partial(self.scaler.step)
-        return self.train_maybe_use_sam(step_partial_func)
+        return self.train_maybe_use_sam(step_partial_func, data, target)
 
-    def train_maybe_use_sam(self, step_partial_func):
-        if hasattr(self.args.optimizer, "use_SAM") and self.args.optimizer.use_SAM:
+    def train_maybe_use_sam(self, step_partial_func, data, target):
+        if attr_is_valid(self.args.optimizer, "use_SAM"):
+            def sam_closure():
+                disable_bn(self.model)
+                while True:
+                    with autocast(enabled=self.args.half, device_type=self.device_type):
+                        output = self.model(data)
+                        if self.output_transformations is not None:
+                            output = self.output_transformations(output)
+
+                        if hasattr(self.args.model, 'returns_loss') and self.args.model.returns_loss:
+                            loss = output
+                        else:
+                            loss = self.criterion(output, target)
+                        loss = loss / self.args.train_dataset.update_every
+
+                    if self.args.optimizer.grad_penalty is not None and self.args.optimizer.grad_penalty > 0.0:
+                        # Creates gradients
+                        scaled_grad_params = torch.autograd.grad(outputs=self.scaler.scale(loss),
+                                                                 inputs=self.model.parameters(), create_graph=True)
+
+                        # Creates unscaled grad_params before computing the penalty. scaled_grad_params are
+                        # not owned by any optimizer, so ordinary division is used instead of scaler.unscale_:
+                        inv_scale = 1. / self.scaler.get_scale()
+                        grad_params = [p * inv_scale for p in scaled_grad_params]
+
+                        # Computes the penalty term and adds it to the loss
+                        with autocast(device_type=self.device_type):
+                            grad_norm = 0
+                            for grad in grad_params:
+                                grad_norm += grad.pow(2).sum()
+                            grad_norm = grad_norm.sqrt()
+                            loss = loss + (grad_norm * self.args.optimizer.grad_penalty)
+
+                    self.scaler.scale(loss).backward()
+
+                    if self.args.optimizer.batch_replay:
+                        found_inf = False
+                        for _, param in self.model.named_parameters():
+                            if param.grad.isnan().any() or param.grad.isinf().any():
+                                found_inf = True
+                                break
+                        if found_inf:
+                            self.scaler.update()
+                            self.optimizer.zero_grad(set_to_none=True)
+                            if isinstance(self.args.optimizer.batch_replay, (int, float)):
+                                self.args.optimizer.batch_replay -= 1
+                        else:
+                            break
+                    else:
+                        break
+
+                if self.train_batch_plot_idx % self.args.train_dataset.update_every == 0:
+                    self.scaler.unscale_(self.optimizer)
+
+                    if self.args.optimizer.max_norm > 0.0:
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.optimizer.max_norm)
+                    enable_bn(self.model)
+
             step_partial_func = partial(step_partial_func, closure=sam_closure)
         return step_partial_func
 
@@ -352,12 +409,12 @@ class Solver:
         if self.scheduler_name == "OneCycleLR":
             self.scheduler.step()
 
-    def train_maybe_do_update(self):
+    def train_maybe_do_update(self, data, target):
         if self.train_batch_plot_idx % self.args.train_dataset.update_every == 0:
             self.scaler.unscale_(self.optimizer)
             self.train_maybe_clip_grad()
 
-            step_partial_func = self.train_create_scaler_func()
+            step_partial_func = self.train_create_scaler_func(data, target)
             step_partial_func(self.optimizer)
             # self.model.update_moving_average()
 
@@ -374,6 +431,7 @@ class Solver:
         return hidden
 
     def simple_train(self):
+        # The reference method for training
         logging.info("train:\n")
         self.model.train()
         predictions = []
@@ -404,7 +462,6 @@ class Solver:
             "loss": loss_sum / len(self.train_loader),
         }
 
-
     def train(self):
         logging.info("train:\n")
         self.model.train()
@@ -433,13 +490,12 @@ class Solver:
                 if self.train_maybe_do_batch_reply():
                     break
 
-            self.train_maybe_do_update()
+            self.train_maybe_do_update(data, target)
 
             predictions.extend(output.detach().cpu())
             targets.extend(target.cpu())
 
             self.save_batch_metrics(output, target)
-
 
         return {
             "prediction": torch.stack(predictions) if len(predictions) else predictions,

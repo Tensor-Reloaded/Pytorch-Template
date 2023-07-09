@@ -9,6 +9,16 @@ from torch import nn
 import models
 
 
+def enable_bn(model):
+    model.train()
+
+
+def disable_bn(model):
+    for module in model.modules():
+        if isinstance(module, (nn.modules.batchnorm._NormBase, nn.LayerNorm)):
+            module.eval()
+
+
 def init_model(model_args):
     parameters = OmegaConf.to_container(model_args.parameters, resolve=True)
     parameters = {k: v for k, v in parameters.items() if v is not None}
