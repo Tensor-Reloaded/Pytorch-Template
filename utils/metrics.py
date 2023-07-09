@@ -4,7 +4,7 @@ from typing import Dict, Sequence
 
 import numpy as np
 import torch
-from torch import nn
+from torch import nn, autocast
 import torch.nn.functional as F
 
 from . import attr_is_valid
@@ -14,15 +14,18 @@ from .losses import losses
 def register_metrics(training_metrics: Dict[str, Dict[str, Sequence[Metric]]], metric_type: str, metric_level: str,
                      metric_results: dict, **kwargs) -> dict:
     metric_prefix = metric_type.capitalize() + "/" + "Batch-" if metric_level == "batch" else ""
-    for metric in training_metrics[metric_type][metric_level]:
-        metric_name = metric_prefix + metric.name
-        result = metric.calculate(level=metric_level, **kwargs)
-        if type(result) is dict:
-            for each_key in result.keys():
-                metric_results[metric_name + f"_{each_key}"] = result[each_key]
-        else:
-            metric_results[metric_name] = result
-    return metric_results
+    with autocast(enabled=True, device_type="cpu"):
+        # Needed for calculating cross entropy metric, otherwise I receive
+        # "log_softmax_lastdim_kernel_impl" not implemented for 'Half'
+        for metric in training_metrics[metric_type][metric_level]:
+            metric_name = metric_prefix + metric.name
+            result = metric.calculate(level=metric_level, **kwargs)
+            if type(result) is dict:
+                for each_key in result.keys():
+                    metric_results[metric_name + f"_{each_key}"] = result[each_key]
+            else:
+                metric_results[metric_name] = result
+        return metric_results
 
 
 def init_metric(metric_args, metric_name: str, solver_metric: bool, training_metrics: dict):
@@ -91,9 +94,9 @@ class Metric:
         if aggregator is None:
             self.aggregator = None
         elif aggregator == "mean":
-            self.aggregator = lambda x: torch.mean(x)
+            self.aggregator = lambda x: torch.mean(torch.Tensor(x))
         elif aggregator == "sum":
-            self.aggregator = lambda x: torch.sum(x)
+            self.aggregator = lambda x: torch.sum(torch.Tensor(x))
         else:
             raise RuntimeError("Unknown aggregator {aggregator}")
 

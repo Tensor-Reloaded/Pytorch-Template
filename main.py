@@ -1,17 +1,21 @@
 import logging
 import os
+from functools import partial
 from shutil import copyfile
 
 import hydra
 import pandas as pd
 import torch
 from omegaconf import DictConfig
+from torch import autocast
+from torch.cuda.amp import GradScaler
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 from utils import configure, maybe_reset_seed, prepare_dataset_and_transforms, init_dataset, init_dataloader, \
     init_model, init_weights, init_batch_norm, load_model, init_optimizer, init_scheduler, init_criterion, \
-    init_metrics, maybe_load_optimizer, metrics, register_metrics, EarlyStopping, tensorboard_export_dump, print_metrics
+    init_metrics, maybe_load_optimizer, metrics, register_metrics, EarlyStopping, tensorboard_export_dump, \
+    print_metrics, get_batch_size, to_device, attr_is_valid
 
 
 @hydra.main(version_base=None, config_path='configs', config_name='config')
@@ -22,11 +26,10 @@ def main(config: DictConfig) -> None:
 
 class Solver:
     def __init__(self, config: DictConfig):
+        self.criterion = None
+        self.output_transformations = None  # TODO: add them
         self.scheduler_name = None
         self.scheduler = None
-        self.val_batch_plot_idx = None
-        self.train_batch_plot_idx = None
-        self.epoch = 1
         self.metrics = None
         self.optimizer = None
         self.save_dir = None
@@ -40,10 +43,17 @@ class Solver:
         self.train_set = None
         self.train_set = None
         self.model = None
+
         self.args = config
         self.device = self.args.device
+        self.device_type = "cuda" if "cuda" in self.device else "cpu"
+
+        self.val_batch_plot_idx = 0
+        self.train_batch_plot_idx = 0
+        self.epoch = 1
 
         self.es = EarlyStopping(patience=self.args.es_patience, min_delta=self.args.es_min_delta)
+        self.scaler = GradScaler(enabled=self.args.half and self.args.grad_scaler)  # FIXME this runs only on cuda
 
         if not self.args.save_dir:
             self.writer = SummaryWriter()
@@ -70,6 +80,11 @@ class Solver:
             loader = init_dataloader(dataset_config, dataset, self.device)
             return dataset, loader
         return None, None
+
+    def prepare_loader(self, loader):
+        if self.args.progress_bar:
+            loader = tqdm(loader)
+        return loader
 
     def init_dataset(self):
         self.train_set, self.train_loader = self.get_set_and_loader("train_dataset")
@@ -101,7 +116,7 @@ class Solver:
         self.scheduler, self.scheduler_name = init_scheduler(self.args.scheduler, self.optimizer)
 
     def init_criterion(self):
-        init_criterion(self.args.loss, self.device, hasattr(self.args, "dba"))
+        self.criterion = init_criterion(self.args.loss, self.device, hasattr(self.args, "dba"))
 
     def init_metrics(self):
         self.metrics = init_metrics(self.args)
@@ -217,6 +232,41 @@ class Solver:
 
     def infer(self):
         raise NotImplementedError()
+        # TODO: Check and implement bellow
+        print("infer:")
+        self.model.eval()
+
+        predictions = []
+        filenames = []
+        with torch.no_grad():
+            for batch_num, (filename, data) in enumerate(self.infer_loader):
+                if isinstance(data, list):
+                    data = [i.to(self.device) for i in data]
+                else:
+                    data = data.to(self.device)
+
+                with autocast(enabled=self.args.half):
+                    output = self.model(data)
+                    if self.output_transformations is not None:
+                        output = self.output_transformations(output)
+
+                if isinstance(output, list) or isinstance(output, tuple):
+                    for pred_idx, o in enumerate(output):
+                        o = o.cpu()
+                        if len(predictions) <= pred_idx:
+                            predictions.append(torch.tensor(o))
+                        else:
+                            predictions[pred_idx] = torch.cat((predictions[pred_idx], o))
+                else:
+                    output = output.cpu()
+                    if isinstance(output, torch.Tensor):
+                        predictions = output
+                    else:
+                        predictions = torch.tensor(output)
+
+                filenames.extend(filename)
+
+        return filenames, predictions
 
     def save_batch_metrics(self, output, target):
         metrics_results = {}
@@ -225,25 +275,133 @@ class Solver:
         metrics_results = register_metrics(self.metrics, "solver", "batch", metrics_results, solver=self)
         print_metrics(self.writer, metrics_results, self.get_train_batch_plot_idx())
 
+    def train_get_output(self, data, hidden):
+        if hidden is None:
+            output = self.model(data)
+        else:
+            output = self.model(data, hidden)
+        if self.output_transformations is not None:
+            output = self.output_transformations(output)
+        return output
+
+    def train_get_loss(self, output, target):
+        if hasattr(self.args.model, 'returns_loss') and self.args.model.returns_loss:
+            loss = output
+        else:
+            loss = self.criterion(output, target)
+        loss /= self.args.train_dataset.update_every
+        return loss
+
+    def train_get_output_and_loss(self, data, target, hidden):
+        output = self.train_get_output(data, hidden)
+        return output, self.train_get_loss(output, target)
+
+    def train_maybe_apply_grad_penalty(self, loss):
+        # TODO: check self.args.optimizer.grad_penalty > 0.0
+        if attr_is_valid(self.args.optimizer, "grad_penalty"):
+            # Creates gradients
+            scaled_grad_params = torch.autograd.grad(outputs=self.scaler.scale(loss),
+                                                     inputs=self.model.parameters(), create_graph=True)
+
+            # Creates unscaled grad_params before computing the penalty. scaled_grad_params are
+            # not owned by any optimizer, so ordinary division is used instead of scaler.unscale_:
+            inv_scale = 1. / self.scaler.get_scale()
+            grad_params = [p * inv_scale for p in scaled_grad_params]
+
+            # Computes the penalty term and adds it to the loss
+            with autocast(device_type=self.device_type):
+                grad_norm = 0
+                for grad in grad_params:
+                    grad_norm += grad.pow(2).sum()
+                grad_norm = grad_norm.sqrt()
+                loss = loss + (grad_norm * self.args.optimizer.grad_penalty)
+        return loss
+
+    def train_maybe_do_batch_reply(self):
+        if attr_is_valid(self.args.optimizer, "batch_replay"):
+            found_inf = False
+            for _, param in self.model.named_parameters():
+                if not param.grad.isfinite.all():  # checking for nan or inf
+                    found_inf = True
+                    break
+            if found_inf:
+                self.scaler.update()
+                self.optimizer.zero_grad(set_to_none=True)
+                if isinstance(self.args.optimizer.batch_replay, (int, float)):
+                    self.args.optimizer.batch_replay -= 1
+            else:
+                return True
+        else:
+            return True
+        return False
+
+    def train_create_scaler_func(self):
+        step_partial_func = partial(self.scaler.step)
+        return self.train_maybe_use_sam(step_partial_func)
+
+    def train_maybe_use_sam(self, step_partial_func):
+        if hasattr(self.args.optimizer, "use_SAM") and self.args.optimizer.use_SAM:
+            step_partial_func = partial(step_partial_func, closure=sam_closure)
+        return step_partial_func
+
+    def train_maybe_clip_grad(self):
+        if hasattr(self.args.optimizer, "max_norm") and self.args.optimizer.max_norm > 0.0:
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.optimizer.max_norm)
+
+    def train_maybe_step_scheduler(self):
+        if self.scheduler_name == "OneCycleLR":
+            self.scheduler.step()
+
+    def train_maybe_do_update(self):
+        if self.train_batch_plot_idx % self.args.train_dataset.update_every == 0:
+            self.scaler.unscale_(self.optimizer)
+            self.train_maybe_clip_grad()
+
+            step_partial_func = self.train_create_scaler_func()
+            step_partial_func(self.optimizer)
+            # self.model.update_moving_average()
+
+            self.scaler.update()
+
+            self.optimizer.zero_grad(set_to_none=True)
+            self.train_maybe_step_scheduler()
+
+    def train_maybe_init_hidden(self, batch_size):
+        if hasattr(self.model, "init_hidden"):
+            hidden = self.model.init_hidden(batch_size, self.device)
+        else:
+            hidden = None
+        return hidden
+
     def train(self):
         logging.info("train:\n")
+        self.model.train()
 
         predictions = []
         targets = []
         loss_sum = 0.0
 
-        # batch_size = get_batch_size(self.train_loader)
+        batch_size = get_batch_size(self.train_loader)
+        hidden = self.train_maybe_init_hidden(batch_size)  # TODO: Support hidden initialization at each batch
+
         # I_N = torch.eye(batch_size, device=self.device)
 
-        # if hasattr(self.model, "init_hidden"):
-        #     hidden = self.model.init_hidden(batch_size, self.device)
+        for data, target in self.prepare_loader(self.train_loader):
+            data = to_device(data, self.device)
+            target = to_device(target, self.device)
 
-        train_loader = self.train_loader
-        if self.args.progress_bar:
-            train_loader = tqdm(train_loader)
+            while True:
+                with autocast(enabled=self.args.half, device_type=self.device_type):
+                    output, loss = self.train_get_output_and_loss(data, target, hidden)
 
-        for data, target in train_loader:
-            output = None
+                loss = self.train_maybe_apply_grad_penalty(loss)
+
+                self.scaler.scale(loss).backward()
+
+                if self.train_maybe_do_batch_reply():
+                    break
+
+            self.train_maybe_do_update()
 
             predictions.extend(output.detach().cpu())
             targets.extend(target.cpu())

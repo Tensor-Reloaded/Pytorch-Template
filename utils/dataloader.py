@@ -38,3 +38,12 @@ def init_dataloader(dataset_config, dataset, pin_memory_device) -> DataLoader:
         sampler=sampler, num_workers=dataset_config.num_workers, collate_fn=collate_fn, pin_memory=pin_memory,
         pin_memory_device=pin_memory_device, drop_last=dataset_config.drop_last,
         persistent_workers=dataset_config.persistent_workers)  # !~Persistent workers may use a lot of ram.
+
+
+def get_batch_size(loader):
+    if loader.batch_sampler is None:
+        if hasattr(loader.dataset, "dataset") and hasattr(loader.dataset.dataset, "batch_size"):
+            return loader.dataset.dataset.batch_size
+
+        raise NotImplementedError("Not implemented batch size for " + str(loader))
+    return loader.batch_sampler.batch_size

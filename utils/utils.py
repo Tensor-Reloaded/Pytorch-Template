@@ -1,7 +1,9 @@
 import random
+from typing import Sequence, Dict
 
 import numpy as np
 import torch
+from torch import Tensor
 from torch.utils.tensorboard import SummaryWriter
 
 
@@ -33,3 +35,13 @@ def maybe_reset_seed(seed: int) -> None:
 def print_metrics(writer: SummaryWriter, result: dict, idx: int) -> None:
     for key, value in result.items():
         writer.add_scalar(key, value, idx)
+
+
+def to_device(data: Tensor | Sequence[Tensor] | Dict[str, Tensor], device):
+    if isinstance(data, Tensor):
+        return data.to(device=device, non_blocking=True)
+    if isinstance(data, (list, tuple)):
+        return [to_device(x, device) for x in data]
+    if isinstance(data, dict):
+        return {key : to_device(value, device) for key, value in data.items()}
+    raise NotImplementedError(f"Not implemented for {type(data)}")
