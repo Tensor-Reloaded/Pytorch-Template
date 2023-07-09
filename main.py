@@ -48,6 +48,7 @@ class Solver:
         self.device = self.args.device
         self.device_type = "cuda" if "cuda" in self.device else "cpu"
 
+        self.test_batch_plot_idx = 0
         self.val_batch_plot_idx = 0
         self.train_batch_plot_idx = 0
         self.epoch = 1
@@ -174,7 +175,7 @@ class Solver:
         elif self.scheduler_name == "ReduceLROnPlateau":
             self.scheduler.step(metrics_results[self.args.scheduler_metric])
         elif self.scheduler_name == "OneCycleLR":
-            pass  # FIXME
+            pass
         else:
             self.scheduler.step()
 
@@ -268,12 +269,20 @@ class Solver:
 
         return filenames, predictions
 
-    def save_batch_metrics(self, output, target):
+    def save_batch_metrics(self, output, target, metric_type):
         metrics_results = {}
         metrics_results = register_metrics(
-            self.metrics, "train", "batch", metrics_results, prediction=output, target=target)
-        metrics_results = register_metrics(self.metrics, "solver", "batch", metrics_results, solver=self)
-        print_metrics(self.writer, metrics_results, self.get_train_batch_plot_idx())
+            self.metrics, metric_type, "batch", metrics_results, prediction=output, target=target)
+        if metric_type == "train":
+            metrics_results = register_metrics(self.metrics, "solver", "batch", metrics_results, solver=self)
+            batch_index = self.get_train_batch_plot_idx()
+        elif metric_type == "val":  # val or test
+            batch_index = self.get_val_batch_plot_idx()
+        else:
+            batch_index = self.get_test_batch_plot_idx()
+
+        if len(metrics_results):
+            print_metrics(self.writer, metrics_results, batch_index)
 
     def train_get_output(self, data, hidden):
         if hidden is None:
@@ -284,17 +293,19 @@ class Solver:
             output = self.output_transformations(output)
         return output
 
-    def train_get_loss(self, output, target):
+    def train_get_loss(self, output, target, is_train):
         if hasattr(self.args.model, 'returns_loss') and self.args.model.returns_loss:
             loss = output
         else:
             loss = self.criterion(output, target)
-        loss /= self.args.train_dataset.update_every
+        if is_train:
+            loss /= self.args.train_dataset.update_every
         return loss
 
-    def train_get_output_and_loss(self, data, target, hidden):
-        output = self.train_get_output(data, hidden)
-        return output, self.train_get_loss(output, target)
+    def train_get_output_and_loss(self, data, target, hidden, is_train=True):
+        with autocast(enabled=self.args.half, device_type=self.device_type):
+            output = self.train_get_output(data, hidden)
+            return output, self.train_get_loss(output, target, is_train)
 
     def train_maybe_apply_grad_penalty(self, loss):
         # TODO: check self.args.optimizer.grad_penalty > 0.0
@@ -473,15 +484,12 @@ class Solver:
         batch_size = get_batch_size(self.train_loader)
         hidden = self.train_maybe_init_hidden(batch_size)  # TODO: Support hidden initialization at each batch
 
-        # I_N = torch.eye(batch_size, device=self.device)
-
         for data, target in self.prepare_loader(self.train_loader):
             data = to_device(data, self.device)
             target = to_device(target, self.device)
 
             while True:
-                with autocast(enabled=self.args.half, device_type=self.device_type):
-                    output, loss = self.train_get_output_and_loss(data, target, hidden)
+                output, loss = self.train_get_output_and_loss(data, target, hidden)
 
                 loss = self.train_maybe_apply_grad_penalty(loss)
 
@@ -495,12 +503,49 @@ class Solver:
             predictions.extend(output.detach().cpu())
             targets.extend(target.cpu())
 
-            self.save_batch_metrics(output, target)
+            self.save_batch_metrics(output, target, "train")
 
         return {
             "prediction": torch.stack(predictions) if len(predictions) else predictions,
             "target": torch.stack(targets) if len(targets) else targets,
             "loss": loss_sum / len(self.train_loader),
+        }
+
+    @torch.no_grad()
+    def val(self, do_test):
+        self.model.eval()
+
+        if do_test:
+            metric_type = "test"
+            loader = self.test_loader
+        else:
+            metric_type = "val"
+            loader = self.val_loader
+
+        logging.info(f"{metric_type}:\n")
+        predictions = []
+        targets = []
+        loss_sum = 0.0
+
+        batch_size = get_batch_size(loader)
+        hidden = self.train_maybe_init_hidden(batch_size)
+
+        for data, target in self.prepare_loader(loader):
+            data = to_device(data, self.device)
+            target = to_device(target, self.device)
+
+            output, loss = self.train_get_output_and_loss(data, target, hidden, is_train=False)
+
+            predictions.extend(output)
+            targets.extend(target)
+            loss_sum += loss.item()
+
+            self.save_batch_metrics(output, target, metric_type)
+
+        return {
+            "prediction": torch.stack(predictions) if len(predictions) else predictions,
+            "target": torch.stack(targets) if len(targets) else targets,
+            "loss": loss_sum / len(loader),
         }
 
     def run(self):
@@ -546,6 +591,11 @@ class Solver:
     def get_val_batch_plot_idx(self):
         ret = self.val_batch_plot_idx
         self.val_batch_plot_idx += 1
+        return ret
+
+    def get_test_batch_plot_idx(self):
+        ret = self.test_batch_plot_idx
+        self.test_batch_plot_idx += 1
         return ret
 
     def save_backup(self):

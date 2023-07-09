@@ -13,7 +13,8 @@ from .losses import losses
 
 def register_metrics(training_metrics: Dict[str, Dict[str, Sequence[Metric]]], metric_type: str, metric_level: str,
                      metric_results: dict, **kwargs) -> dict:
-    metric_prefix = metric_type.capitalize() + "/" + "Batch-" if metric_level == "batch" else ""
+    metric_prefix = metric_type.capitalize() + "/"
+    metric_prefix += "Batch-" if metric_level == "batch" else ""
     with autocast(enabled=True, device_type="cpu"):
         # Needed for calculating cross entropy metric, otherwise I receive
         # "log_softmax_lastdim_kernel_impl" not implemented for 'Half'
