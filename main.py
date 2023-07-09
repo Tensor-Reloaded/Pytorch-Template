@@ -373,6 +373,38 @@ class Solver:
             hidden = None
         return hidden
 
+    def simple_train(self):
+        logging.info("train:\n")
+        self.model.train()
+        predictions = []
+        targets = []
+        loss_sum = 0.0
+
+        for data, target in self.prepare_loader(self.train_loader):
+            data = data.to(self.device, non_blocking=True)
+            target = target.to(self.device, non_blocking=True)
+
+            output = self.model(data)
+            loss = self.criterion(output, target)
+
+            loss_sum += loss.item()
+            loss.backward()
+
+            self.train_maybe_clip_grad()
+
+            self.optimizer.step()
+            self.optimizer.zero_grad(set_to_none=True)
+
+            predictions.extend(output.detach().cpu())
+            targets.extend(target.cpu())
+
+        return {
+            "prediction": torch.stack(predictions) if len(predictions) else predictions,
+            "target": torch.stack(targets) if len(targets) else targets,
+            "loss": loss_sum / len(self.train_loader),
+        }
+
+
     def train(self):
         logging.info("train:\n")
         self.model.train()
@@ -412,7 +444,7 @@ class Solver:
         return {
             "prediction": torch.stack(predictions) if len(predictions) else predictions,
             "target": torch.stack(targets) if len(targets) else targets,
-            "loss": loss_sum,
+            "loss": loss_sum / len(self.train_loader),
         }
 
     def run(self):
