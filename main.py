@@ -443,7 +443,7 @@ class Solver:
 
     def simple_train(self):
         # The reference method for training
-        logging.info("train:\n")
+        logging.info("train:")
         self.model.train()
         predictions = []
         targets = []
@@ -474,7 +474,7 @@ class Solver:
         }
 
     def train(self):
-        logging.info("train:\n")
+        logging.info("train:")
         self.model.train()
 
         predictions = []
@@ -522,7 +522,7 @@ class Solver:
             metric_type = "val"
             loader = self.val_loader
 
-        logging.info(f"{metric_type}:\n")
+        logging.info(f"{metric_type}:")
         predictions = []
         targets = []
         loss_sum = 0.0
@@ -555,7 +555,7 @@ class Solver:
             best_metrics = {}
 
             while self.epoch < self.args.epochs:
-                logging.info(f"\n===> epoch: {self.epoch}/{self.args.epochs}")
+                logging.info(f"===> epoch: {self.epoch}/{self.args.epochs}")
 
                 train_results = self.train()
 
@@ -578,6 +578,7 @@ class Solver:
                 self.maybe_save_model()
                 self.scheduler_step(metrics_results)
                 self.maybe_early_stopping(metrics_results)
+                self.epoch += 1
 
         except KeyboardInterrupt:
             pass
