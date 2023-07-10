@@ -1,6 +1,49 @@
+import logging
+
 import torch
+import torch_optimizer
+from omegaconf import OmegaConf
+from torch import optim
 
 
+def init_optimizer(optimizer_config, model):
+    parameters = OmegaConf.to_container(optimizer_config.parameters, resolve=True)
+    parameters = {k: v for k, v in parameters.items() if v is not None}
+    parameters["params"] = model.parameters()
+
+    try:
+        optimizer = getattr(torch_optimizer, optimizer_config.name)
+    except AttributeError:
+        try:
+            optimizer = getattr(optim, optimizer_config.name)
+        except AttributeError:
+            try:
+                optimizer = optimizers[optimizer_config.name]
+            except KeyError:
+                logging.error(f"Optimizer {optimizer_config.name} does not exist!")
+                exit()
+
+    if hasattr(optimizer_config, "use_SAM") and optimizer_config.use_SAM:
+        optimizer = optimizers['SAM'](params=parameters["params"], base_optimizer=optimizer,
+                                      rho=optimizer_config.SAM_rho)
+    else:
+        optimizer = optimizer(**parameters)
+
+    if hasattr(optimizer_config, "use_lookahead") and optimizer_config.use_lookahead:
+        optimizer = torch_optimizer.Lookahead(optimizer, k=optimizer_config.lookahead_k,
+                                              alpha=optimizer_config.lookahead_alpha)
+
+    return optimizer
+
+
+def maybe_load_optimizer(optimizer, optimizer_path, restart_from_backup):
+    if len(optimizer_path) > 0 and restart_from_backup:
+        optimizer.load_state_dict(torch.load(optimizer_path))
+        logging.info(f"Loaded optimizer from {optimizer_path}")
+    return optimizer
+
+
+# TODO: use library one
 class SAM(torch.optim.Optimizer):
     def __init__(self, params, base_optimizer, rho=0.5, adaptive=True, **kwargs):
         assert rho >= 0.0, f"Invalid rho, should be non-negative: {rho}"
@@ -23,7 +66,8 @@ class SAM(torch.optim.Optimizer):
                 p.add_(e_w)  # climb to the local maximum "w + e(w)"
                 self.state[p]["e_w"] = e_w
 
-        if zero_grad: self.zero_grad()
+        if zero_grad:
+            self.zero_grad()
 
     @torch.no_grad()
     def second_step(self, zero_grad=False):

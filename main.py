@@ -1,572 +1,239 @@
+import logging
 import os
-from collections import OrderedDict
 from functools import partial
 from shutil import copyfile
 
 import hydra
-import numpy as np
 import pandas as pd
-import torch.backends.cudnn as cudnn
-import torch.nn as nn
-import torch.optim as optim
-import torch.utils.data
-import torch_optimizer
-from hydra.utils import to_absolute_path
-from omegaconf import DictConfig, OmegaConf
-from torch.cuda.amp import autocast, GradScaler
-from torch.utils.data.sampler import SubsetRandomSampler
+import torch
+from omegaconf import DictConfig
+from torch import autocast
+from torch.cuda.amp import GradScaler
 from torch.utils.tensorboard import SummaryWriter
-from torchvision import transforms as transforms
+from tqdm import tqdm
 
-import models
-from utils import *
-from utils.misc import progress_bar, save_current_code
-
-
-@hydra.main(config_path='configs', config_name='config')
-def main(config: DictConfig):
-    head, tail = os.path.split(config.save_dir)
-    if tail == 'None':
-        config.save_dir = head
-    else:
-        config.save_dir = os.path.join(head, tail)
-
-    save_config_path = "runs/" + config.save_dir
-    os.makedirs(save_config_path, exist_ok=True)
-    with open(os.path.join(save_config_path, "README.md"), 'w+') as f:
-        f.write(OmegaConf.to_yaml(config, resolve=True))
-    save_current_code(save_config_path)
-
-    solver = Solver(config)
-    return solver.run()
+from utils import configure, maybe_reset_seed, prepare_dataset_and_transforms, init_dataset, init_dataloader, \
+    init_model, init_weights, init_batch_norm, load_model, init_optimizer, init_scheduler, init_criterion, \
+    init_metrics, maybe_load_optimizer, metrics, register_metrics, EarlyStopping, tensorboard_export_dump, \
+    print_metrics, get_batch_size, to_device, attr_is_valid, disable_bn, enable_bn
 
 
-class Solver(object):
-    def __init__(self, config):
-        self.model = None
-        self.args = config
+@hydra.main(version_base=None, config_path='configs', config_name='config')
+def main(config: DictConfig) -> None:
+    configure(config)
+    Solver(config).run()
+
+
+class Solver:
+    def __init__(self, config: DictConfig):
         self.criterion = None
-        self.optimizer = None
+        self.output_transformations = None  # TODO: add them
+        self.scheduler_name = None
         self.scheduler = None
-        self.device = self.args.device
-        self.cuda = True if 'cuda' in self.device else False
-        self.train_loader = None
-        self.val_loader = None
+        self.metrics = None
+        self.optimizer = None
+        self.save_dir = None
         self.infer_loader = None
+        self.infer_set = None
+        self.test_loader = None
+        self.test_set = None
+        self.val_set = None
+        self.val_loader = None
+        self.train_loader = None
+        self.train_set = None
+        self.train_set = None
+        self.model = None
+
+        self.args = config
+        self.device = self.args.device
+        self.device_type = "cuda" if "cuda" in self.device else "cpu"
+
+        self.test_batch_plot_idx = 0
+        self.val_batch_plot_idx = 0
+        self.train_batch_plot_idx = 0
+        self.epoch = 1
+
         self.es = EarlyStopping(patience=self.args.es_patience, min_delta=self.args.es_min_delta)
-        self.scaler = GradScaler(enabled=self.args.half and self.args.grad_scaler)
+        self.scaler = GradScaler(enabled=self.args.half and self.args.grad_scaler)  # FIXME this runs only on cuda
 
         if not self.args.save_dir:
             self.writer = SummaryWriter()
         else:
             self.writer = SummaryWriter(log_dir="runs/" + self.args.save_dir)
 
-        self.epoch = 1
-        self.train_batch_plot_idx = 0
-        self.val_batch_plot_idx = 0
+    def init(self):
+        maybe_reset_seed(self.args.seed)
+        self.init_dataset()
+        self.init_model()
+        self.init_optimizer()
+        self.init_scheduler()
+        self.init_criterion()
+        self.init_metrics()
 
-    @staticmethod
-    def construct_transformations(transformation_config):
-        # TODO: This is a static function, it can be moved into a separate file to free up main
-        transformations_config = OmegaConf.load(
-            to_absolute_path(f'configs/transformations/{transformation_config}.yaml'))
-        cacheable_transformations = []
-        uncacheable_transformations = []
+        self.maybe_load_state()
 
-        for idx, (name, parameters) in enumerate(transformations_config.items()):
-            if name not in transformations:
-                print(f"This transformation is not implemented ({name}), go ahead and commit it")
-                exit()
+    def get_set_and_loader(self, set_name: str):
+        if hasattr(self.args, set_name):
+            logging.info(f"Loading {set_name}!")
+            dataset_config, cached_transforms, runtime_transforms = prepare_dataset_and_transforms(
+                getattr(self.args, set_name))
+            dataset = init_dataset(dataset_config, cached_transforms, runtime_transforms, self.device)
+            loader = init_dataloader(dataset_config, dataset, self.device)
+            return dataset, loader
+        return None, None
 
-            apply_to = None
-            if 'apply_to' in parameters:
-                apply_to = parameters.pop('apply_to')
-            transformation = transformations[name]
-            transformation_fnc = TransformWrapper(transformation['constructor'](**parameters), apply_to)
-
-            if transformation['cacheable']:
-                cacheable_transformations.append(transformation_fnc)
-            else:
-                uncacheable_transformations.append(transformation_fnc)
-
-        return cacheable_transformations, uncacheable_transformations
-
-    @staticmethod
-    def construct_dataset(dataset_config, transformations_cached, transformations_not_cached):
-        # TODO: This is a static method, it can be moved outside to free up main
-        parameters = OmegaConf.to_container(dataset_config.load_params, resolve=True)
-        parameters = {k: v for k, v in parameters.items() if v is not None}
-
-        if not hasattr(dataset_config, 'subset') or dataset_config.subset is None or dataset_config.subset == '' or dataset_config.subset <= 0:
-            dataset = datasets[dataset_config.name](**parameters)
-        else:
-            dataset = select_dataset_subset(datasets[dataset_config.name](**parameters), dataset_config.subset)
-
-        dataset = MemoryStoredDataset(dataset=dataset,
-                                      transformations_cached=transformations_cached,
-                                      transformations_not_cached=transformations_not_cached,
-                                      save_in_memory=dataset_config.save_in_memory)
-
-        return dataset
-
-    @staticmethod
-    def construct_dataloader(dataset_config, dataset):
-        # TODO: This is a static method, it can be moved outside to free main
-        if hasattr(dataset_config, 'mixup_args') and dataset_config.mixup_args != None:
-            collate_fn = FastCollateMixup(**dataset_config.mixup_args)
-        else:
-            collate_fn = None
-
-        sampler = None
-
-        if os.name == 'nt':
-            dataset_config.num_workers = 0
-
-        loader = torch.utils.data.DataLoader(dataset=dataset, batch_size=dataset_config.batch_size,
-                                             shuffle=(dataset_config.shuffle and sampler is None), sampler=sampler,
-                                             num_workers=dataset_config.num_workers, collate_fn=collate_fn,
-                                             pin_memory=dataset_config.pin_memory, drop_last=dataset_config.drop_last,
-                                             persistent_workers=dataset_config.num_workers > 0)
+    def prepare_loader(self, loader):
+        if self.args.progress_bar:
+            loader = tqdm(loader)
         return loader
 
     def init_dataset(self):
-        # TODO: This initialization can be separated into 3 functions and can be moved outside
-        if hasattr(self.args, 'train_dataset'):
-            if self.args.train_dataset.name not in datasets:
-                print(f"This dataset is not implemented ({self.args.train_dataset.name}), go ahead and commit it")
-                exit()
-            if hasattr(self.args.train_dataset, 'transform'):
-                train_transformations_cache, train_transformations_not_cache = self.construct_transformations(
-                    self.args.train_dataset.transform)
-            else:
-                train_transformations_cache, train_transformations_not_cache = None, None
-            self.train_set = self.construct_dataset(self.args.train_dataset, train_transformations_cache,
-                                                    train_transformations_not_cache)
-            self.train_loader = self.construct_dataloader(self.args.train_dataset, self.train_set)
-
-        if hasattr(self.args, 'val_dataset'):
-            if self.args.val_dataset.name not in datasets:
-                print(f"This dataset is not implemented ({self.args.val_dataset.name}), go ahead and commit it")
-                exit()
-            if hasattr(self.args.val_dataset, 'transform'):
-                val_transformations_cache, val_transformations_not_cache = self.construct_transformations(
-                    self.args.val_dataset.transform)
-            else:
-                val_transformations_cache, val_transformations_not_cache = None, None
-            self.val_set = self.construct_dataset(self.args.val_dataset, val_transformations_cache,
-                                                  val_transformations_not_cache)
-            self.val_loader = self.construct_dataloader(self.args.val_dataset, self.val_set)
-
-        if hasattr(self.args, 'infer_dataset'):
-            if self.args.infer_dataset.name not in datasets:
-                print(f"This dataset is not implemented ({self.args.infer_dataset.name}), go ahead and commit it")
-                exit()
-            if hasattr(self.args.infer_dataset, 'transform'):
-                infer_transformations_cache, infer_transformations_not_cache = self.construct_transformations(
-                    self.args.infer_dataset.transform)
-            else:
-                infer_transformations_cache, infer_transformations_not_cache = None, None
-            self.infer_set = self.construct_dataset(self.args.infer_dataset, infer_transformations_cache,
-                                                    infer_transformations_not_cache)
-            self.infer_loader = self.construct_dataloader(self.args.infer_dataset, self.infer_set)
-
-        self.output_transformations = None
-        if hasattr(self.args, 'output_transformation'):
-            cacheable, not_cacheable = self.construct_transformations(self.args.output_transformation)
-            self.output_transformations = transforms.Compose(cacheable + not_cacheable)
+        self.train_set, self.train_loader = self.get_set_and_loader("train_dataset")
+        self.val_set, self.val_loader = self.get_set_and_loader("val_dataset")
+        self.test_set, self.test_loader = self.get_set_and_loader("test_dataset")
+        self.infer_set, self.infer_loader = self.get_set_and_loader("infer_dataset")
 
     def init_model(self):
-        # TODO: This can also be refactored out and moved outside
-        if self.cuda:
-            cudnn.benchmark = True
-
-            # The flag below controls whether to allow TF32 on matmul. This flag defaults to True.
-            torch.backends.cuda.matmul.allow_tf32 = True
-
-            # The flag below controls whether to allow TF32 on cuDNN. This flag defaults to True.
-            torch.backends.cudnn.allow_tf32 = True
-        else:
-            self.device = torch.device('cpu')
-
-        parameters = OmegaConf.to_container(self.args.model.parameters, resolve=True)
-        parameters = {k: v for k, v in parameters.items() if v is not None}
-        try:
-            self.model = getattr(models, self.args.model.name)
-        except:
-            print(f"This model is not implemented ({self.args.model.name}), go ahead and commit it")
-            exit()
-        self.model = self.model(**parameters)
+        self.model = init_model(self.args.model)
 
         self.save_dir = os.path.join(self.args.storage_dir, "model_weights", self.args.save_dir)
         if not os.path.isdir(self.save_dir):
             os.makedirs(self.save_dir)
 
         init_weights(self.model, self.args.initialization)
-
         if self.args.initialization_batch_norm:
-            # batch norm initialization
-            for m in self.model.modules():
-                if isinstance(m, nn.BatchNorm2d):
-                    nn.init.constant_(m.weight, 1)
-                    nn.init.constant_(m.bias, 0)
+            init_batch_norm(self.model)
+        if len(self.args.load_model):
+            self.model = load_model(self.args.model, self.args.load_model, self.model, self.device)
 
-        if len(self.args.load_model) > 0:
-            print("Loading model from " + self.args.load_model)
-            if self.args.model.name == "Recorder":
-                loaded_model = torch.load(self.args.load_model, map_location=self.device)
-                new_state_dict = OrderedDict()
-
-                for key, value in loaded_model.items():
-                    # if key.startswith('net.transformer.'):
-                    # new_state_dict[key[16:]] = value
-                    if key.startswith('net.'):
-                        new_state_dict[key[4:]] = value
-
-                # self.model.vit.transformer.load_state_dict(new_state_dict)
-                self.model.vit.load_state_dict(new_state_dict)
-            else:
-                self.model.load_state_dict(torch.load(self.args.load_model, map_location=self.device))
         self.model = self.model.to(self.device)
 
     def init_optimizer(self):
-        # TODO: This can also be moved outside
-        parameters = OmegaConf.to_container(self.args.optimizer.parameters, resolve=True)
-        parameters = {k: v for k, v in parameters.items() if v is not None}
-        parameters["params"] = self.model.parameters()
-
-        try:
-            self.optimizer = getattr(torch_optimizer, self.args.optimizer.name)
-        except Exception as e:
-            try:
-                self.optimizer = getattr(optim, self.args.optimizer.name)
-            except:
-                try:
-                    self.optimizer = optimizers[self.args.optimizer.name]
-                except:
-                    self.optimizer = getattr(torch.optim, self.args.optimizer.name)
-                    print(f"This optimizer is not implemented ({self.args.optimizer.name}), go ahead and commit it")
-                    exit()
-
-        if self.args.optimizer.use_SAM:
-            self.optimizer = optimizers['SAM'](params=parameters["params"], base_optimizer=self.optimizer,
-                                               rho=self.args.optimizer.SAM_rho)
-        if hasattr(self.args.optimizer, "use_SAM") and self.args.optimizer.use_SAM:
-            self.optimizer = optimizers['SAM'](params=parameters["params"], base_optimizer=self.optimizer,
-                                               rho=self.args.optimizer.SAM_rho)
-        else:
-            self.optimizer = self.optimizer(**parameters)
-
-        if hasattr(self.args.optimizer, "use_lookahead") and self.args.optimizer.use_lookahead:
-            self.optimizer = torch_optimizer.Lookahead(self.optimizer, k=self.args.optimizer.lookahead_k,
-                                                       alpha=self.args.optimizer.lookahead_alpha)
+        self.optimizer = init_optimizer(self.args.optimizer, self.model)
+        self.optimizer = maybe_load_optimizer(self.optimizer, self.args.load_optimizer, self.args.restart_from_backup)
 
     def init_scheduler(self):
-        # Same as above
-        (name, parameters) = list(self.args.scheduler.items())[1]
-        self.scheduler_name = name
-        if name not in schedulers:
-            print(f"This scheduler is not implemented ({name}), go ahead and commit it")
-            exit()
-
-        parameters = OmegaConf.to_container(parameters, resolve=True)
-        parameters = {k: v for k, v in parameters.items() if v is not None}
-        parameters["optimizer"] = self.optimizer
-        self.scheduler = schedulers[name](**parameters)
+        # TODO: Implement many schedulers (list of schedulers)
+        self.scheduler, self.scheduler_name = init_scheduler(self.args.scheduler, self.optimizer)
 
     def init_criterion(self):
-        # TODO: Same as above
-        (name, parameters) = list(self.args.loss.items())[0]
-        if name not in losses:
-            print(f"This loss is not implemented ({name}), go ahead and commit it")
-            exit()
-
-        parameters = OmegaConf.to_container(parameters, resolve=True)
-        parameters = {k: v for k, v in parameters.items() if v is not None}
-        parameters["device"] = self.device
-
-        self.criterion = losses[name]['constructor'](**parameters)
+        self.criterion = init_criterion(self.args.loss, self.device, hasattr(self.args, "dba"))
 
     def init_metrics(self):
-        # TODO: Same, can be moved outside
-        self.metrics = {
-            'train': {
-                'batch': [],
-                'epoch': []
-            },
-            'val': {
-                'batch': [],
-                'epoch': []
-            },
-            'solver': {
-                'batch': [],
-                'epoch': []
-            },
-        }
+        self.metrics = init_metrics(self.args)
 
-        for (name, args) in self.args.train_metrics.items():
-            if name not in metrics:
-                print(f"This metric is not implemented ({name}), go ahead and commit it")
-                exit()
-
-            if not hasattr(args, 'index'):
-                metric_index = None
-            else:
-                metric_index = args.index
-
-            if args.parameters is None:
-                args.parameters = {}
-            metric_func = metrics[name]['constructor'](**args.parameters)
-            metric_object = Metric(name, metric_func, index=metric_index, solver_metric=False,
-                                   aggregator=args.aggregator)
-            for level in args.levels:
-                self.metrics['train'][level].append(metric_object)
-
-        for (name, args) in self.args.val_metrics.items():
-            if name not in metrics:
-                print(f"This metric is not implemented ({name}), go ahead and commit it")
-                exit()
-
-            if not hasattr(args, 'index'):
-                metric_index = None
-            else:
-                metric_index = args.index
-
-            if args.parameters is None:
-                args.parameters = {}
-            metric_func = metrics[name]['constructor'](**args.parameters)
-            metric_object = Metric(name, metric_func, index=metric_index, solver_metric=False,
-                                   aggregator=args.aggregator)
-            for level in args.levels:
-                self.metrics['val'][level].append(metric_object)
-
-        for (name, args) in self.args.solver_metrics.items():
-            if name not in metrics:
-                print(f"This metric is not implemented ({name}), go ahead and commit it")
-                exit()
-
-            if args.parameters is None:
-                args.parameters = {}
-            metric_func = metrics[name]['constructor'](**args.parameters)
-            metric_object = Metric(name, metric_func, index=None, solver_metric=True, aggregator=args.aggregator)
-            for level in args.levels:
-                self.metrics['solver'][level].append(metric_object)
-
-    def disable_bn(self):
-        for module in self.model.modules():
-            if isinstance(module, nn.modules.batchnorm._NormBase) or isinstance(module, nn.LayerNorm):
-                module.eval()
-
-    def enable_bn(self):
-        self.model.train()
-
-    def train(self):
-        print("train:")
-        self.model.train()
-
-        predictions = []
-        targets = []
-        for batch_num, (data, target) in enumerate(self.train_loader):
-            if isinstance(data, list) or isinstance(data, tuple):
-                data = [i.to(self.device) for i in data]
-            else:
-                data = data.to(self.device)
-            if isinstance(target, list) or isinstance(target, tuple):
-                target = [i.to(self.device) for i in target]
-            else:
-                target = target.to(self.device)
-
-            def sam_closure():
-                self.disable_bn()
-                while True:
-                    with autocast(enabled=self.args.half):
-                        output = self.model(data)
-                        if self.output_transformations is not None:
-                            output = self.output_transformations(output)
-
-                        if hasattr(self.args.model, 'returns_loss') and self.args.model.returns_loss:
-                            loss = output
-                        else:
-                            loss = self.criterion(output, target)
-                        loss = loss / self.args.train_dataset.update_every
-
-                    if self.args.optimizer.grad_penalty is not None and self.args.optimizer.grad_penalty > 0.0:
-                        # Creates gradients
-                        scaled_grad_params = torch.autograd.grad(outputs=self.scaler.scale(loss),
-                                                                 inputs=self.model.parameters(), create_graph=True)
-
-                        # Creates unscaled grad_params before computing the penalty. scaled_grad_params are
-                        # not owned by any optimizer, so ordinary division is used instead of scaler.unscale_:
-                        inv_scale = 1. / self.scaler.get_scale()
-                        grad_params = [p * inv_scale for p in scaled_grad_params]
-
-                        # Computes the penalty term and adds it to the loss
-                        with autocast():
-                            grad_norm = 0
-                            for grad in grad_params:
-                                grad_norm += grad.pow(2).sum()
-                            grad_norm = grad_norm.sqrt()
-                            loss = loss + (grad_norm * self.args.optimizer.grad_penalty)
-
-                    self.scaler.scale(loss).backward()
-
-                    if self.args.optimizer.batch_replay:
-                        found_inf = False
-                        for _, param in self.model.named_parameters():
-                            if param.grad.isnan().any() or param.grad.isinf().any():
-                                found_inf = True
-                                break
-                        if found_inf:
-                            self.scaler.update()
-                            self.optimizer.zero_grad()  # (set_to_none=True)
-                            self.model.zero_grad(set_to_none=True)
-                            if type(self.args.optimizer.batch_replay) == int or type(
-                                    self.args.optimizer.batch_replay) == float:
-                                self.args.optimizer.batch_replay -= 1
-                        else:
-                            break
-                    else:
-                        break
-
-                if self.train_batch_plot_idx % self.args.train_dataset.update_every == 0:
-                    self.scaler.unscale_(self.optimizer)
-
-                    if self.args.optimizer.max_norm > 0.0:
-                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.optimizer.max_norm)
-                    self.enable_bn()
-
-            while True:
-                with autocast(enabled=self.args.half):
-                    output = self.model(data)
-                    if self.output_transformations is not None:
-                        output = self.output_transformations(output)
-
-                    if hasattr(self.args.model, 'returns_loss') and self.args.model.returns_loss:
-                        loss = output
-                    else:
-                        loss = self.criterion(output, target)
-                    loss = loss / self.args.train_dataset.update_every
-
-                if hasattr(self.args.optimizer,
-                           "grad_penalty") and self.args.optimizer.grad_penalty is not None and self.args.optimizer.grad_penalty > 0.0:
-                    # Creates gradients
-                    scaled_grad_params = torch.autograd.grad(outputs=self.scaler.scale(loss),
-                                                             inputs=self.model.parameters(), create_graph=True)
-
-                    # Creates unscaled grad_params before computing the penalty. scaled_grad_params are
-                    # not owned by any optimizer, so ordinary division is used instead of scaler.unscale_:
-                    inv_scale = 1. / self.scaler.get_scale()
-                    grad_params = [p * inv_scale for p in scaled_grad_params]
-
-                    # Computes the penalty term and adds it to the loss
-                    with autocast():
-                        grad_norm = 0
-                        for grad in grad_params:
-                            grad_norm += grad.pow(2).sum()
-                        grad_norm = grad_norm.sqrt()
-                        loss = loss + (grad_norm * self.args.optimizer.grad_penalty)
-
-                self.scaler.scale(loss).backward()
-
-                if hasattr(self.args.optimizer, "batch_replay") and self.args.optimizer.batch_replay:
-                    found_inf = False
-                    for _, param in self.model.named_parameters():
-                        if param.grad.isnan().any() or param.grad.isinf().any():
-                            found_inf = True
-                            break
-                    if found_inf:
-                        self.scaler.update()
-                        self.optimizer.zero_grad()  # (set_to_none=True)
-                        self.model.zero_grad(set_to_none=True)
-                        if type(self.args.optimizer.batch_replay) == int or type(
-                                self.args.optimizer.batch_replay) == float:
-                            self.args.optimizer.batch_replay -= 1
-                    else:
-                        break
-                else:
+    def maybe_load_state(self):
+        if len(self.args.load_training_state) > 0:
+            training_state = torch.load(self.args.load_training_state)
+            self.epoch = training_state["epoch"]
+            self.train_batch_plot_idx = training_state["train_batch_plot_idx"]
+            self.val_batch_plot_idx = training_state["val_batch_plot_idx"]
+            for metric in self.metrics['solver']['epoch']:
+                if metric.name == "Real Epoch Count":
+                    metric.metric_func.counter = training_state["real_epoch_count"]
                     break
 
-            if self.train_batch_plot_idx % self.args.train_dataset.update_every == 0:
-                step_partial_func = partial(self.scaler.step)
+    def maybe_infer(self):
+        # TODO: Rewrite for general case
+        if self.args.infer_only:
+            filenames, predictions = self.infer()
+            predictions = predictions.argmax(-1) + 1
+            save_path = os.path.join(self.save_dir, "predictions.csv")
+            pd.DataFrame({'Patient': filenames, 'Class': predictions.cpu().numpy()}).to_csv(save_path, header=False,
+                                                                                            index=False)
+            exit()
 
-                if hasattr(self.args.optimizer, "use_SAM") and self.args.optimizer.use_SAM:
-                    step_partial_func = partial(step_partial_func, closure=sam_closure)
+    def maybe_register_best(self, metrics_results, best_metrics):
+        if self.args.optimized_metric in metrics_results:
+            save_best_metric = False
 
-                self.scaler.unscale_(self.optimizer)
+            if self.args.optimized_metric not in best_metrics:
+                best_metrics[self.args.optimized_metric] = metrics_results[self.args.optimized_metric]
+                save_best_metric = True
+            if metrics[self.args.optimized_metric.split('/')[-1]]['higher_is_better']:
+                if best_metrics[self.args.optimized_metric] < metrics_results[self.args.optimized_metric]:
+                    best_metrics[self.args.optimized_metric] = metrics_results[self.args.optimized_metric]
+                    save_best_metric = True
+            else:
+                if best_metrics[self.args.optimized_metric] > metrics_results[self.args.optimized_metric]:
+                    best_metrics[self.args.optimized_metric] = metrics_results[self.args.optimized_metric]
+                    save_best_metric = True
 
-                if hasattr(self.args.optimizer, "max_norm") and self.args.optimizer.max_norm > 0.0:
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.optimizer.max_norm)
+            if save_best_metric and self.args.save_model:
+                best = best_metrics[self.args.optimized_metric]
+                self.save(self.epoch, best)
+                logging.info(f"===> BEST {self.args.optimized_metric} PERFORMANCE: {best:.5f}")
 
-                step_partial_func(self.optimizer)
-                # self.model.update_moving_average()
+    def maybe_save_model(self):
+        if self.args.save_model and self.epoch % self.args.save_interval == 0:
+            self.save_backup()
+            self.save(self.epoch, 0)
 
-                self.scaler.update()
+    def scheduler_step(self, metrics_results):
+        if self.scheduler_name == "MultiStepLR":
+            self.scheduler.step()
+        elif self.scheduler_name == "ReduceLROnPlateau":
+            self.scheduler.step(metrics_results[self.args.scheduler_metric])
+        elif self.scheduler_name == "OneCycleLR":
+            pass
+        else:
+            self.scheduler.step()
 
-                self.optimizer.zero_grad()  # (set_to_none=True)
-                self.model.zero_grad(set_to_none=True)
+    def maybe_early_stopping(self, metrics_results):
+        if self.es.step(metrics_results[self.args.es_metric]):
+            print("Early stopping")
+            raise KeyboardInterrupt
 
-                if self.scheduler_name == "OneCycleLR":
-                    self.scheduler.step()
+    def end_training(self, best_metrics):
+        if self.args.optimized_metric not in best_metrics:
+            best = torch.nan
+        else:
+            best = best_metrics[self.args.optimized_metric]
+        logging.info(f"===> BEST {self.args.optimized_metric} PERFORMANCE: {best:.5f}")
 
-            # TODO: Check here for your particular case, and detach and move to CPU these 2 tensors
-            predictions.extend(output)
-            targets.extend(target)
+        files = os.listdir(self.save_dir)
+        paths = [os.path.join(self.save_dir, basename) for basename in files if "_0" not in basename]
+        if len(paths) > 0:
+            src = max(paths, key=os.path.getctime)
+            copyfile(src, os.path.join("runs", self.args.save_dir, os.path.basename(src)))
 
-            metrics_results = {}
-            for metric in self.metrics['train']['batch']:
-                metrics_results["Train/Batch-" + metric.name] = metric.calculate(output, target, level='batch')
+        with open("runs/" + self.args.save_dir + "/README.md", 'a+') as f:
+            f.write(f"\n## {self.args.optimized_metric}\n {best_metrics[self.args.optimized_metric]:.5f}")
+        tensorboard_export_dump(self.writer)
+        logging.info("Saved best accuracy checkpoint")
 
-            for metric in self.metrics['solver']['batch']:
-                metrics_results["Solver/Batch-" + metric.name] = metric.calculate(solver=self, level='batch')
+        return best_metrics[self.args.optimized_metric]
 
-            print_metrics(self.writer, metrics_results, self.get_train_batch_plot_idx())
+    def save(self, epoch, metric, tag=None):
+        if tag is not None:
+            tag = "_" + tag
+        else:
+            tag = ""
+        model_out_path = os.path.join(self.save_dir, f"model_{epoch}_{metric}{tag}.pth")
+        optimizer_out_path = os.path.join(self.save_dir, f"optimizer_{epoch}_{metric}{tag}.pth")
+        training_state_out_path = os.path.join(self.save_dir, f"training_state_{epoch}_{metric}{tag}.pth")
+        torch.save(self.model.state_dict(), model_out_path)
+        torch.save(self.optimizer.state_dict(), optimizer_out_path)
 
-            if self.args.progress_bar:
-                progress_bar(batch_num, len(self.train_loader))
+        training_state = {
+            "epoch": self.epoch,
+            "batch_size": self.args.train_dataset.batch_size,
+            "train_batch_plot_idx": self.train_batch_plot_idx,
+            "val_batch_plot_idx": self.val_batch_plot_idx,
+        }
 
-        return torch.stack(predictions), torch.stack(targets)
+        for metric in self.metrics['solver']['epoch']:
+            if metric.name == "Real Epoch Count":
+                training_state["real_epoch_count"] = metric.metric_func.counter
+                break
 
-    def val(self):
-        print("val:")
-        self.model.eval()
+        torch.save(training_state, training_state_out_path)
 
-        predictions = []
-        targets = []
-        with torch.no_grad():
-            for batch_num, (data, target) in enumerate(self.val_loader):
-                if isinstance(data, list):
-                    data = [i.to(self.device) for i in data]
-                else:
-                    data = data.to(self.device)
-                if isinstance(target, list):
-                    target = [i.to(self.device) for i in target]
-                else:
-                    target = target.to(self.device)
-
-                with autocast(enabled=self.args.half):
-                    output = self.model(data)
-                    if self.output_transformations is not None:
-                        output = self.output_transformations(output)
-
-                    if hasattr(self.args.model, 'returns_loss') and self.args.model.returns_loss:
-                        loss = output
-                    else:
-                        loss = self.criterion(output, target)
-
-                predictions.extend(output)
-                targets.extend(target)
-
-                metrics_results = {}
-                for metric in self.metrics['val']['batch']:
-                    metrics_results["Val/Batch-" + metric.name] = metric.calculate(output, target, level='batch')
-
-                print_metrics(self.writer, metrics_results, self.get_val_batch_plot_idx())
-
-                if self.args.progress_bar:
-                    progress_bar(batch_num, len(self.val_loader))
-
-        return torch.stack(predictions), torch.stack(targets)
+        logging.info(f"Checkpoint saved to {model_out_path}")
 
     def infer(self):
+        raise NotImplementedError()
+        # TODO: Check and implement bellow
         print("infer:")
         self.model.eval()
 
@@ -602,162 +269,339 @@ class Solver(object):
 
         return filenames, predictions
 
-    def save(self, epoch, metric, tag=None):
-        if tag != None:
-            tag = "_" + tag
+    def save_batch_metrics(self, output, target, metric_type):
+        metrics_results = {}
+        metrics_results = register_metrics(
+            self.metrics, metric_type, "batch", metrics_results, prediction=output, target=target)
+        if metric_type == "train":
+            metrics_results = register_metrics(self.metrics, "solver", "batch", metrics_results, solver=self)
+            batch_index = self.get_train_batch_plot_idx()
+        elif metric_type == "val":  # val or test
+            batch_index = self.get_val_batch_plot_idx()
         else:
-            tag = ""
-        model_out_path = os.path.join(self.save_dir, "model_{}_{}{}.pth".format(epoch, metric, tag))
-        optimizer_out_path = os.path.join(self.save_dir, "optimizer_{}_{}{}.pth".format(epoch, metric, tag))
-        training_state_out_path = os.path.join(self.save_dir, "training_state_{}_{}{}.pth".format(epoch, metric, tag))
-        torch.save(self.model.state_dict(), model_out_path)
-        torch.save(self.optimizer.state_dict(), optimizer_out_path)
+            batch_index = self.get_test_batch_plot_idx()
 
-        training_state = {
-            "epoch": self.epoch,
-            "batch_size": self.args.train_dataset.batch_size,
-            "train_batch_plot_idx": self.train_batch_plot_idx,
-            "val_batch_plot_idx": self.val_batch_plot_idx,
+        if len(metrics_results):
+            print_metrics(self.writer, metrics_results, batch_index)
+
+    def train_get_output(self, data, hidden):
+        if hidden is None:
+            output = self.model(data)
+        else:
+            output = self.model(data, hidden)
+        if self.output_transformations is not None:
+            output = self.output_transformations(output)
+        return output
+
+    def train_get_loss(self, output, target, is_train):
+        if hasattr(self.args.model, 'returns_loss') and self.args.model.returns_loss:
+            loss = output
+        else:
+            loss = self.criterion(output, target)
+        if is_train:
+            loss /= self.args.train_dataset.update_every
+        return loss
+
+    def train_get_output_and_loss(self, data, target, hidden, is_train=True):
+        with autocast(enabled=self.args.half, device_type=self.device_type):
+            output = self.train_get_output(data, hidden)
+            return output, self.train_get_loss(output, target, is_train)
+
+    def train_maybe_apply_grad_penalty(self, loss):
+        # TODO: check self.args.optimizer.grad_penalty > 0.0
+        if attr_is_valid(self.args.optimizer, "grad_penalty"):
+            # Creates gradients
+            scaled_grad_params = torch.autograd.grad(outputs=self.scaler.scale(loss),
+                                                     inputs=self.model.parameters(), create_graph=True)
+
+            # Creates unscaled grad_params before computing the penalty. scaled_grad_params are
+            # not owned by any optimizer, so ordinary division is used instead of scaler.unscale_:
+            inv_scale = 1. / self.scaler.get_scale()
+            grad_params = [p * inv_scale for p in scaled_grad_params]
+
+            # Computes the penalty term and adds it to the loss
+            with autocast(device_type=self.device_type):
+                grad_norm = 0
+                for grad in grad_params:
+                    grad_norm += grad.pow(2).sum()
+                grad_norm = grad_norm.sqrt()
+                loss = loss + (grad_norm * self.args.optimizer.grad_penalty)
+        return loss
+
+    def train_maybe_do_batch_reply(self):
+        if attr_is_valid(self.args.optimizer, "batch_replay"):
+            found_inf = False
+            for _, param in self.model.named_parameters():
+                if not param.grad.isfinite.all():  # checking for nan or inf
+                    found_inf = True
+                    break
+            if found_inf:
+                self.scaler.update()
+                self.optimizer.zero_grad(set_to_none=True)
+                if isinstance(self.args.optimizer.batch_replay, (int, float)):
+                    self.args.optimizer.batch_replay -= 1
+            else:
+                return True
+        else:
+            return True
+        return False
+
+    def train_create_scaler_func(self, data, target):
+        step_partial_func = partial(self.scaler.step)
+        return self.train_maybe_use_sam(step_partial_func, data, target)
+
+    def train_maybe_use_sam(self, step_partial_func, data, target):
+        if attr_is_valid(self.args.optimizer, "use_SAM"):
+            def sam_closure():
+                disable_bn(self.model)
+                while True:
+                    with autocast(enabled=self.args.half, device_type=self.device_type):
+                        output = self.model(data)
+                        if self.output_transformations is not None:
+                            output = self.output_transformations(output)
+
+                        if hasattr(self.args.model, 'returns_loss') and self.args.model.returns_loss:
+                            loss = output
+                        else:
+                            loss = self.criterion(output, target)
+                        loss = loss / self.args.train_dataset.update_every
+
+                    if self.args.optimizer.grad_penalty is not None and self.args.optimizer.grad_penalty > 0.0:
+                        # Creates gradients
+                        scaled_grad_params = torch.autograd.grad(outputs=self.scaler.scale(loss),
+                                                                 inputs=self.model.parameters(), create_graph=True)
+
+                        # Creates unscaled grad_params before computing the penalty. scaled_grad_params are
+                        # not owned by any optimizer, so ordinary division is used instead of scaler.unscale_:
+                        inv_scale = 1. / self.scaler.get_scale()
+                        grad_params = [p * inv_scale for p in scaled_grad_params]
+
+                        # Computes the penalty term and adds it to the loss
+                        with autocast(device_type=self.device_type):
+                            grad_norm = 0
+                            for grad in grad_params:
+                                grad_norm += grad.pow(2).sum()
+                            grad_norm = grad_norm.sqrt()
+                            loss = loss + (grad_norm * self.args.optimizer.grad_penalty)
+
+                    self.scaler.scale(loss).backward()
+
+                    if self.args.optimizer.batch_replay:
+                        found_inf = False
+                        for _, param in self.model.named_parameters():
+                            if param.grad.isnan().any() or param.grad.isinf().any():
+                                found_inf = True
+                                break
+                        if found_inf:
+                            self.scaler.update()
+                            self.optimizer.zero_grad(set_to_none=True)
+                            if isinstance(self.args.optimizer.batch_replay, (int, float)):
+                                self.args.optimizer.batch_replay -= 1
+                        else:
+                            break
+                    else:
+                        break
+
+                if self.train_batch_plot_idx % self.args.train_dataset.update_every == 0:
+                    self.scaler.unscale_(self.optimizer)
+
+                    if self.args.optimizer.max_norm > 0.0:
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.optimizer.max_norm)
+                    enable_bn(self.model)
+
+            step_partial_func = partial(step_partial_func, closure=sam_closure)
+        return step_partial_func
+
+    def train_maybe_clip_grad(self):
+        if hasattr(self.args.optimizer, "max_norm") and self.args.optimizer.max_norm > 0.0:
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.optimizer.max_norm)
+
+    def train_maybe_step_scheduler(self):
+        if self.scheduler_name == "OneCycleLR":
+            self.scheduler.step()
+
+    def train_maybe_do_update(self, data, target):
+        if self.train_batch_plot_idx % self.args.train_dataset.update_every == 0:
+            self.scaler.unscale_(self.optimizer)
+            self.train_maybe_clip_grad()
+
+            step_partial_func = self.train_create_scaler_func(data, target)
+            step_partial_func(self.optimizer)
+            # self.model.update_moving_average()
+
+            self.scaler.update()
+
+            self.optimizer.zero_grad(set_to_none=True)
+            self.train_maybe_step_scheduler()
+
+    def train_maybe_init_hidden(self, batch_size):
+        if hasattr(self.model, "init_hidden"):
+            hidden = self.model.init_hidden(batch_size, self.device)
+        else:
+            hidden = None
+        return hidden
+
+    def simple_train(self):
+        # The reference method for training
+        logging.info("train:")
+        self.model.train()
+        predictions = []
+        targets = []
+        loss_sum = 0.0
+
+        for data, target in self.prepare_loader(self.train_loader):
+            data = data.to(self.device, non_blocking=True)
+            target = target.to(self.device, non_blocking=True)
+
+            output = self.model(data)
+            loss = self.criterion(output, target)
+
+            loss_sum += loss.item()
+            loss.backward()
+
+            self.train_maybe_clip_grad()
+
+            self.optimizer.step()
+            self.optimizer.zero_grad(set_to_none=True)
+
+            predictions.extend(output.detach().cpu())
+            targets.extend(target.cpu())
+
+        return {
+            "prediction": torch.stack(predictions) if len(predictions) else predictions,
+            "target": torch.stack(targets) if len(targets) else targets,
+            "loss": loss_sum / len(self.train_loader),
         }
 
-        for metric in self.metrics['solver']['epoch']:
-            if metric.name == "Real Epoch Count":
-                training_state["real_epoch_count"] = metric.metric_func.counter
-                break
+    def train(self):
+        logging.info("train:")
+        self.model.train()
 
-        torch.save(training_state, training_state_out_path)
+        predictions = []
+        targets = []
+        loss_sum = 0.0
 
-        print("Checkpoint saved to {}".format(model_out_path))
+        batch_size = get_batch_size(self.train_loader)
+        hidden = self.train_maybe_init_hidden(batch_size)  # TODO: Support hidden initialization at each batch
 
-    def run(self):
-        if self.args.seed is not None:
-            reset_seed(self.args.seed)
-        self.init_dataset()
-        self.init_model()
-        self.init_optimizer()
-        self.init_scheduler()
-        self.init_criterion()
-        self.init_metrics()
+        for data, target in self.prepare_loader(self.train_loader):
+            data = to_device(data, self.device)
+            target = to_device(target, self.device)
 
-        if len(self.args.load_optimizer) > 0:
-            self.optimizer.load_state_dict(torch.load(self.args.load_optimizer))
-            print("Loaded optimizer from {}".format(self.args.load_optimizer))
+            while True:
+                output, loss = self.train_get_output_and_loss(data, target, hidden)
 
-        if len(self.args.load_training_state) > 0:
-            training_state = torch.load(self.args.load_training_state)
-            self.epoch = training_state["epoch"]
-            self.train_batch_plot_idx = training_state["train_batch_plot_idx"]
-            self.val_batch_plot_idx = training_state["val_batch_plot_idx"]
+                loss = self.train_maybe_apply_grad_penalty(loss)
 
-            for metric in self.metrics['solver']['epoch']:
-                if metric.name == "Real Epoch Count":
-                    metric.metric_func.counter = training_state["real_epoch_count"]
+                self.scaler.scale(loss).backward()
+
+                if self.train_maybe_do_batch_reply():
                     break
 
-        try:
-            if self.args.infer_only == True:
-                filenames, predictions = self.infer()  # If its the "separated" dataset, we need to average the scores of the 2/3 different projections
-                predictions = predictions.argmax(-1) + 1
-                save_path = os.path.join(self.save_dir, "predictions.csv")
-                pd.DataFrame({'Patient': filenames, 'Class': predictions.cpu().numpy()}).to_csv(save_path, header=False,
-                                                                                                index=False)
-                exit()
+            self.train_maybe_do_update(data, target)
 
+            predictions.extend(output.detach().cpu())
+            targets.extend(target.cpu())
+
+            self.save_batch_metrics(output, target, "train")
+
+        return {
+            "prediction": torch.stack(predictions) if len(predictions) else predictions,
+            "target": torch.stack(targets) if len(targets) else targets,
+            "loss": loss_sum / len(self.train_loader),
+        }
+
+    @torch.no_grad()
+    def val(self, do_test):
+        self.model.eval()
+
+        if do_test:
+            metric_type = "test"
+            loader = self.test_loader
+        else:
+            metric_type = "val"
+            loader = self.val_loader
+
+        logging.info(f"{metric_type}:")
+        predictions = []
+        targets = []
+        loss_sum = 0.0
+
+        batch_size = get_batch_size(loader)
+        hidden = self.train_maybe_init_hidden(batch_size)
+
+        for data, target in self.prepare_loader(loader):
+            data = to_device(data, self.device)
+            target = to_device(target, self.device)
+
+            output, loss = self.train_get_output_and_loss(data, target, hidden, is_train=False)
+
+            predictions.extend(output)
+            targets.extend(target)
+            loss_sum += loss.item()
+
+            self.save_batch_metrics(output, target, metric_type)
+
+        return {
+            "prediction": torch.stack(predictions) if len(predictions) else predictions,
+            "target": torch.stack(targets) if len(targets) else targets,
+            "loss": loss_sum / len(loader),
+        }
+
+    def run(self):
+        self.init()
+        try:
+            self.maybe_infer()
             best_metrics = {}
-            higher_is_better = metrics[self.args.optimized_metric.split('/')[-1]]['higher_is_better']
-            for epoch in range(self.epoch, self.args.epochs + 1):
-                print("\n===> epoch: %d/%d" % (epoch, self.args.epochs))
-                self.epoch = epoch
+
+            while self.epoch < self.args.epochs:
+                logging.info(f"===> epoch: {self.epoch}/{self.args.epochs}")
+
+                train_results = self.train()
 
                 metrics_results = {}
+                metrics_results = register_metrics(self.metrics, "train", "epoch", metrics_results, **train_results)
 
-                predictions, targets = self.train()
-                for metric in self.metrics['train']['epoch']:
-                    metric_name = "Train/" + metric.name
-                    result = metric.calculate(predictions, targets, level='epoch')
-                    if type(result) is dict:
-                        for each_key in result.keys():
-                            metrics_results[metric_name + "_{0}".format(each_key)] = result[each_key]
-                    else:
-                        metrics_results[metric_name] = result
+                if self.val_loader is not None and self.epoch % self.args.val_every == 0:
+                    val_results = self.val(do_test=False)
+                    metrics_results = register_metrics(self.metrics, "val", "epoch", metrics_results, **val_results)
 
-                if self.epoch % self.args.val_every == 0:
-                    predictions, targets = self.val()
-                    for metric in self.metrics['val']['epoch']:
-                        metric_name = "Val/" + metric.name
-                        result = metric.calculate(predictions, targets, level='epoch')
-                        if type(result) is dict:
-                            for each_key in result.keys():
-                                metrics_results[metric_name + "_{0}".format(each_key)] = result[each_key]
-                        else:
-                            metrics_results[metric_name] = result
+                if self.test_loader is not None and self.epoch % self.args.test_every == 0:
+                    test_results = self.val(do_test=True)
+                    metrics_results = register_metrics(self.metrics, "test", "epoch", metrics_results, **test_results)
 
-                for metric in self.metrics['solver']['epoch']:
-                    metric_name = "Solver/" + metric.name
-                    metrics_results[metric_name] = metric.calculate(solver=self, level='epoch')
+                metrics_results = register_metrics(self.metrics, "solver", "epoch", metrics_results, solver=self)
 
                 print_metrics(self.writer, metrics_results, self.epoch)
 
-                if self.epoch % self.args.val_every == 0:
-                    save_best_metric = False
-                    if self.args.optimized_metric not in best_metrics:
-                        best_metrics[self.args.optimized_metric] = metrics_results[self.args.optimized_metric]
-                        save_best_metric = True
-                    if higher_is_better:
-                        if best_metrics[self.args.optimized_metric] < metrics_results[self.args.optimized_metric]:
-                            best_metrics[self.args.optimized_metric] = metrics_results[self.args.optimized_metric]
-                            save_best_metric = True
-                    else:
-                        if best_metrics[self.args.optimized_metric] > metrics_results[self.args.optimized_metric]:
-                            best_metrics[self.args.optimized_metric] = metrics_results[self.args.optimized_metric]
-                            save_best_metric = True
+                self.maybe_register_best(metrics_results, best_metrics)
+                self.maybe_save_model()
+                self.scheduler_step(metrics_results)
+                self.maybe_early_stopping(metrics_results)
+                self.epoch += 1
 
-                    if save_best_metric:
-                        self.save(epoch, best_metrics[self.args.optimized_metric])
-                        print("===> BEST " + self.args.optimized_metric + " PERFORMANCE: %.5f" % best_metrics[
-                            self.args.optimized_metric])
-
-                if self.args.save_model and epoch % self.args.save_interval == 0:
-                    self.save(epoch, 0)
-
-                if self.scheduler_name == "MultiStepLR":
-                    self.scheduler.step()
-                elif self.scheduler_name == "ReduceLROnPlateau":
-                    self.scheduler.step(metrics_results[self.args.scheduler_metric])
-                elif self.scheduler_name == "OneCycleLR":
-                    pass
-                else:
-                    self.scheduler.step()
-
-                if self.es.step(metrics_results[self.args.es_metric]):
-                    print("Early stopping")
-                    raise KeyboardInterrupt
         except KeyboardInterrupt:
             pass
-
-        print(
-            "===> BEST " + self.args.optimized_metric + " PERFORMANCE: %.5f" % best_metrics[self.args.optimized_metric])
-        files = os.listdir(self.save_dir)
-        paths = [os.path.join(self.save_dir, basename) for basename in files if "_0" not in basename]
-        if len(paths) > 0:
-            src = max(paths, key=os.path.getctime)
-            copyfile(src, os.path.join("runs", self.args.save_dir, os.path.basename(src)))
-
-        with open("runs/" + self.args.save_dir + "/README.md", 'a+') as f:
-            f.write("\n## " + self.args.optimized_metric + "\n %.5f" % (best_metrics[self.args.optimized_metric]))
-        tensorboard_export_dump(self.writer)
-        print("Saved best accuracy checkpoint")
-
-        return best_metrics[self.args.optimized_metric]
+        self.end_training(best_metrics)
 
     def get_train_batch_plot_idx(self):
+        ret = self.train_batch_plot_idx
         self.train_batch_plot_idx += 1
-        return self.train_batch_plot_idx - 1
+        return ret
 
     def get_val_batch_plot_idx(self):
+        ret = self.val_batch_plot_idx
         self.val_batch_plot_idx += 1
-        return self.val_batch_plot_idx - 1
+        return ret
+
+    def get_test_batch_plot_idx(self):
+        ret = self.test_batch_plot_idx
+        self.test_batch_plot_idx += 1
+        return ret
+
+    def save_backup(self):
+        raise NotImplementedError("TODO")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
